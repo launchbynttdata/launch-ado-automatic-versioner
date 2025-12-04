@@ -1,0 +1,1 @@
+# launch-ado-automatic-versioner
