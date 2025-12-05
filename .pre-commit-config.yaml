@@ -16,13 +16,14 @@ repos:
       - id: name-tests-test
       - id: requirements-txt-fixer
 
-  - repo: https://github.com/dnephin/pre-commit-golang
-    rev: v0.5.1
+  - repo: https://github.com/tekwizely/pre-commit-golang
+    rev: v1.0.0-rc.4
     hooks:
       - id: go-fmt
       - id: golangci-lint
-      - id: go-unit-tests
       - id: go-mod-tidy
+      - id: go-test-mod
+      - id: go-vet
 
   - repo: https://github.com/psf/black
     rev: 25.1.0
