@@ -1,31 +1,31 @@
-# Final stage
-FROM alpine:latest
+FROM golang:1.25 AS builder
 
-ARG BINARY_NAME=main
+ARG BINARY_NAME=aav
+
+WORKDIR /src
+
+COPY . .
+
+RUN go build -o /${BINARY_NAME} ./cmd/aav/
+
+FROM ubuntu:24.04 AS final
+
+ARG BINARY_NAME=aav
 # Install ca-certificates for HTTPS requests
-RUN apk --no-cache add ca-certificates
-
-# Create non-root user for security
-RUN addgroup -g 1001 -S appgroup && \
-    adduser -u 1001 -S appuser -G appgroup
+RUN apt-get update && \
+    apt-get install -y ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    update-ca-certificates && \
+    groupadd -g 1001 appgroup && \
+    useradd -u 1001 -g appgroup -s /bin/false appuser
 
 WORKDIR /app
 
 # Copy binary and documentation from builder stage
-COPY . .
-
-# Change ownership to non-root user
-RUN chown -R appuser:appgroup /app
+COPY --from=builder --chown=appuser:appgroup /${BINARY_NAME} /app/${BINARY_NAME}
 
 # Switch to non-root user
 USER appuser
-
-# Expose port (adjust if your app uses a different port)
-EXPOSE 8080
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
 
 # Run the application
 CMD ["./${BINARY_NAME}"]
