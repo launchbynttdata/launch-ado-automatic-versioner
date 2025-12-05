@@ -1,4 +1,4 @@
-# Contributing to ai-code-template-go
+# Contributing to azure-automatic-versioner
 
 Thank you for your interest in contributing to this AI-assisted Go template repository! This guide will help you get started.
 
