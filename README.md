@@ -35,6 +35,57 @@ AAV_TAGGER_NAME="Build Bot" AAV_TAGGER_EMAIL=ci@example.com ./bin/aav create-tag
 - **PR validation**: call `aav pr-label` after checkout and before policy evaluation.
 - **Main pipeline**: run `aav infer-bump --commit-sha $(Build.SourceVersion)` to capture intent, export its stdout, then invoke `aav create-tag` (release or RC mode) with that bump.
 
+```yaml
+# azure-pipelines.yml
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - '*'
+
+variables:
+  AAV_ORG_URL: $(System.TeamFoundationCollectionUri)
+  AAV_PROJECT: $(System.TeamProject)
+  AAV_REPO: $(Build.Repository.Name)
+  AAV_LABEL_PREFIX: semver-
+
+stages:
+  - stage: PRValidation
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+    jobs:
+      - job: LabelPR
+        steps:
+          - checkout: self
+          - script: |
+              go run ./cmd/aav pr-label \
+                --pr-id $(System.PullRequest.PullRequestId) \
+                --source-branch $(System.PullRequest.SourceBranch)
+            displayName: Apply semver label
+
+  - stage: MainRelease
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    dependsOn: PRValidation
+    jobs:
+      - job: TagRelease
+        steps:
+          - checkout: self
+          - script: |
+              BUMP=$(go run ./cmd/aav infer-bump \
+                --commit-sha $(Build.SourceVersion))
+              echo "##vso[task.setvariable variable=AAV_BUMP]$BUMP"
+            displayName: Infer bump
+          - script: |
+              go run ./cmd/aav create-tag \
+                --commit-sha $(Build.SourceVersion) \
+                --tag-mode release \
+                --bump $(AAV_BUMP)
+            displayName: Create release tag
+```
+
 ## Configuration Reference
 
 | Purpose | Environment Variable | Flag | Default | Notes |
