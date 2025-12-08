@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2025-12-04
+Last updated: 2025-12-08
 
 ## Conversation Highlights & Decisions
 
@@ -26,18 +26,15 @@ Last updated: 2025-12-04
 | Tagging service (business logic) | ✅ | `internal/services/tagging` pulls refs via the ADO client interface, feeds them into the planner, and surfaces release/RC plans with validation + tests. |
 | PR labeling service (business logic) | ✅ | `internal/services/prlabel` now wires branch mapping + label resolvers through the ADO client to enforce the required PR label rules with full unit tests. |
 | ADO client interface definitions | ✅ | Added `internal/ado` with the shared `Client` interface (`ListRefsWithPrefix`, `ListPRLabels`, `AddPRLabel`) plus the `Ref` model; concrete REST implementation still pending. |
-| ADO client interface + REST implementation | ⏳ | Pending. |
-| CLI (Cobra commands, env/flag plumbing) | ⏳ | Not yet started; existing template `main.go` still needs replacement. |
-| Services for `pr-label`, `infer-bump`, `create-tag` | ⏳ | Not implemented. |
-| Tests | ⏳ | Only placeholder `main_test.go` exists; comprehensive unit tests still required. |
-| README / docs overhaul | ⏳ | Existing template README remains; needs full rewrite per requirements. |
+| ADO client interface + REST implementation | ✅ | `internal/ado` now ships the full SDK-backed client (PAT auth, refs, PR labels, tag creation) plus helper structs and validation. |
+| CLI (Cobra commands, env/flag plumbing) | ✅ | `cmd/aav` implements `pr-label`, `infer-bump`, and `create-tag` with env/flag precedence, logging, and service wiring. |
+| Services for `pr-label`, `infer-bump`, `create-tag` | ✅ | `internal/services/prlabel`, `inferbump`, and `tagging` implement all workflows with coverage. |
+| Tests | ✅ | Unit suites cover business logic and services (`branchmap`, `labels`, `tagplan`, `prlabel`, `inferbump`, `tagging`, etc.). Integration harness lives under `integration/` for live ADO runs. |
+| README / docs overhaul | ✅ | README now documents overview, quick start, config precedence, pipeline example, architecture, testing, and contributing. |
 
 ## Next Steps
 
-1. **Finish architecture scaffolding**: add config structs, branch mapping defaults, label logic, semver/tag planning packages, and wire them into dedicated services.
-2. **Implement ADO client**: interface + REST-backed implementation with PAT auth, plus mocks for tests.
-3. **Build CLI**: create `cmd/aav` entrypoint with Cobra, integrate resolver + logging, and expose the three required subcommands.
-4. **Testing**: add table-driven tests for all business logic and service layers, using mocked ADO client interactions.
-5. **Documentation**: replace README with the required AAV content, add usage examples, and keep `docs/IMPLEMENTATION_STATUS.md` current as milestones are reached.
+1. **Integration automation**: remaining TODOs focus on orchestration helpers for end-to-end tests (automated PR creation/merge tooling) and expanding the documented workflow for those suites.
+2. **Release polish**: ensure `docs/IMPLEMENTATION_STATUS.md` stays current as integration tooling lands; consider adding CHANGELOG / versioning policy before GA.
 
 Please update this document whenever significant decisions are made or major components land, so we have a single source of truth for project status.
