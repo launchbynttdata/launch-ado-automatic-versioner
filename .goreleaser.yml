@@ -106,7 +106,7 @@ dockers:
   - image_templates:
       - "ghcr.io/benvon/{{ .ProjectName }}:{{ .Version }}"
       - "ghcr.io/benvon/{{ .ProjectName }}:latest"
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.goreleaser
     use: buildx
     ids:
       - default
