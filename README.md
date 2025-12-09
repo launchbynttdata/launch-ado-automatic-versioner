@@ -17,6 +17,9 @@
 # Build the CLI
 GOOS=$(go env GOOS) GOARCH=$(go env GOARCH) go build -o ./bin/aav ./cmd/aav
 
+# Verify embedded build metadata
+./bin/aav version
+
 # Add semver labels to a PR during validation
 AAV_ORG_URL=... AAV_PROJECT=... AAV_REPO=... AAV_TOKEN=... \
 AAV_PR_ID=1234 AAV_SOURCE_BRANCH=feature/awesome-fix \
@@ -125,6 +128,14 @@ stages:
 | `pr-label` | Pull-request validation | Resolves bump intent from the source branch, ensures the expected semver label exists, loudly warns on conflicts, and never removes user labels. |
 | `infer-bump` | Main-branch CI after squash merge | Locates the PR by merge commit, rehydrates bump intent from labels, defaults to `patch` unless `--strict` is set. Prints `major`, `minor`, or `patch` to stdout for scripting. |
 | `create-tag` | Release/RC tagging stages | Discovers existing tags, computes the next SemVer (release or RC), and creates an annotated tag on the desired commit with full trace logging. |
+| `version` | Introspection | Prints the embedded semantic version and build date for the running binary. |
+
+### Build Metadata & `aav version`
+
+- Every build stamps two ldflags into `internal/version`: the semantic version (`Version`) and UTC build date (`BuildDate`).
+- `make build` derives defaults from `git describe --tags` (falling back to `dev`) and the current UTC time. Override them by setting `AAV_VERSION` and/or `AAV_BUILD_DATE` before invoking the target.
+- GoReleaser already injects release metadata via the same variables, so published artifacts report the tag they were built from when you run `aav version`.
+- The `version` subcommand prints both values so pipelines (or end users) can confirm which artifact they are running.
 
 ## Architecture
 

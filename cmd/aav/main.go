@@ -19,6 +19,7 @@ import (
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/services/inferbump"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/services/prlabel"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/services/tagging"
+	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/version"
 )
 
 const (
@@ -118,14 +119,31 @@ func newRootCommand() *cobra.Command {
 		},
 	}
 
+	cmd.Version = version.Version
+	cmd.SetVersionTemplate("aav {{.Version}}\n")
+
 	flags := bindRootFlags(cmd)
 	cmd.AddCommand(
 		newPRLabelCommand(flags),
 		newInferCommand(flags),
 		newTagCommand(flags),
+		newVersionCommand(),
 	)
 
 	return cmd
+}
+
+func newVersionCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print build metadata",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "aav %s\nbuild date: %s\n", version.Version, version.BuildDate); err != nil {
+				return fmt.Errorf("writing version info: %w", err)
+			}
+			return nil
+		},
+	}
 }
 
 func bindRootFlags(cmd *cobra.Command) *rootFlagSet {

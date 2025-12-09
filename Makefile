@@ -12,6 +12,11 @@ BINARY_NAME := "aav"
 BUILD_DIR := ./bin
 MAIN_DIR ?= ./cmd/$(BINARY_NAME)
 GOVULNCHECK_VERSION ?= 1.1.4
+AAV_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+AAV_BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
+LD_FLAGS := -s -w \
+	-X github.com/launchbynttdata/launch-ado-automatic-versioner/internal/version.Version=$(AAV_VERSION) \
+	-X github.com/launchbynttdata/launch-ado-automatic-versioner/internal/version.BuildDate=$(AAV_BUILD_DATE)
 
 # Colors for output
 GREEN := \033[32m
@@ -300,15 +305,15 @@ build:
 	$(call print_info,Building binaries...)
 	mkdir -p $(BUILD_DIR)
 	$(call print_info,Building for Linux AMD64...)
-	GOOS=linux GOARCH=amd64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 $(MAIN_DIR)
+	GOOS=linux GOARCH=amd64 go build -ldflags '$(LD_FLAGS)' -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 $(MAIN_DIR)
 	$(call print_info,Building for Linux ARM64...)
-	GOOS=linux GOARCH=arm64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 $(MAIN_DIR)
+	GOOS=linux GOARCH=arm64 go build -ldflags '$(LD_FLAGS)' -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 $(MAIN_DIR)
 	$(call print_info,Building for macOS AMD64...)
-	GOOS=darwin GOARCH=amd64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 $(MAIN_DIR)
+	GOOS=darwin GOARCH=amd64 go build -ldflags '$(LD_FLAGS)' -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 $(MAIN_DIR)
 	$(call print_info,Building for macOS ARM64...)
-	GOOS=darwin GOARCH=arm64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 $(MAIN_DIR)
+	GOOS=darwin GOARCH=arm64 go build -ldflags '$(LD_FLAGS)' -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 $(MAIN_DIR)
 	$(call print_info,Building for Windows AMD64...)
-	GOOS=windows GOARCH=amd64 go build -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe $(MAIN_DIR)
+	GOOS=windows GOARCH=amd64 go build -ldflags '$(LD_FLAGS)' -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe $(MAIN_DIR)
 	$(call print_success,All builds completed!)
 	$(call print_info,Built binaries:)
 	@ls -la $(BUILD_DIR)/
