@@ -31,9 +31,15 @@ func (r Resolver) logConflict(setting, envVal, cliVal string) {
 	)
 }
 
-func (r Resolver) pick(setting string, envVal string, envSet bool, cliVal string, cliSet bool, defaultVal string) string {
+func (r Resolver) pick(setting string, envVal string, envSet bool, cliVal string, cliSet bool, defaultVal string, isSecret bool) string {
 	if envSet && cliSet && envVal != cliVal {
-		r.logConflict(setting, envVal, cliVal)
+		logEnv := envVal
+		logCli := cliVal
+		if isSecret {
+			logEnv = "***"
+			logCli = "***"
+		}
+		r.logConflict(setting, logEnv, logCli)
 	}
 	if envSet {
 		return envVal
@@ -47,7 +53,13 @@ func (r Resolver) pick(setting string, envVal string, envSet bool, cliVal string
 // String resolves a string setting using the precedence rules.
 func (r Resolver) String(setting, envKey, cliVal string, cliSet bool, defaultVal string) string {
 	envVal, envSet := os.LookupEnv(envKey)
-	return r.pick(setting, strings.TrimSpace(envVal), envSet, cliVal, cliSet, defaultVal)
+	return r.pick(setting, strings.TrimSpace(envVal), envSet, cliVal, cliSet, defaultVal, false)
+}
+
+// Secret resolves a sensitive string setting using the precedence rules, redacting values in logs.
+func (r Resolver) Secret(setting, envKey, cliVal string, cliSet bool, defaultVal string) string {
+	envVal, envSet := os.LookupEnv(envKey)
+	return r.pick(setting, strings.TrimSpace(envVal), envSet, cliVal, cliSet, defaultVal, true)
 }
 
 // Bool resolves a boolean setting.

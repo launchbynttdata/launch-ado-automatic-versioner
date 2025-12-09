@@ -42,6 +42,7 @@ type stringFlag struct {
 	base       flagBase
 	defaultVal string
 	value      string
+	isSecret   bool
 }
 
 func bindStringFlag(fs *pflag.FlagSet, setting, name, short, envKey, defaultVal, usage string) *stringFlag {
@@ -49,6 +50,25 @@ func bindStringFlag(fs *pflag.FlagSet, setting, name, short, envKey, defaultVal,
 		base:       newFlagBase(fs, setting, name, envKey),
 		defaultVal: defaultVal,
 		value:      defaultVal,
+		isSecret:   false,
+	}
+	if fs == nil {
+		return f
+	}
+	if short != "" {
+		fs.StringVarP(&f.value, name, short, defaultVal, describeUsage(usage, envKey))
+	} else {
+		fs.StringVar(&f.value, name, defaultVal, describeUsage(usage, envKey))
+	}
+	return f
+}
+
+func bindSecretFlag(fs *pflag.FlagSet, setting, name, short, envKey, defaultVal, usage string) *stringFlag {
+	f := &stringFlag{
+		base:       newFlagBase(fs, setting, name, envKey),
+		defaultVal: defaultVal,
+		value:      defaultVal,
+		isSecret:   true,
 	}
 	if fs == nil {
 		return f
@@ -63,6 +83,9 @@ func bindStringFlag(fs *pflag.FlagSet, setting, name, short, envKey, defaultVal,
 
 func (f *stringFlag) Value(resolver config.Resolver) string {
 	cliVal := strings.TrimSpace(f.value)
+	if f.isSecret {
+		return resolver.Secret(f.base.setting, f.base.envKey, cliVal, f.base.changed(), f.defaultVal)
+	}
 	return resolver.String(f.base.setting, f.base.envKey, cliVal, f.base.changed(), f.defaultVal)
 }
 

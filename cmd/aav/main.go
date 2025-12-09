@@ -135,7 +135,7 @@ func bindRootFlags(cmd *cobra.Command) *rootFlagSet {
 		orgURL:      bindStringFlag(fs, "org-url", "org-url", "", envOrgURL, "", "Azure DevOps organization URL"),
 		project:     bindStringFlag(fs, "project", "project", "", envProject, "", "Azure DevOps project name"),
 		repo:        bindStringFlag(fs, "repo", "repo", "", envRepo, "", "Azure DevOps repository name"),
-		token:       bindStringFlag(fs, "token", "token", "", envToken, "", "Azure DevOps personal access token or System.AccessToken"),
+		token:       bindSecretFlag(fs, "token", "token", "", envToken, "", "Azure DevOps personal access token or System.AccessToken"),
 		logLevel:    bindStringFlag(fs, "log-level", "log-level", "", envLogLevel, logging.LevelTerse, "Log verbosity (terse or verbose)"),
 		labelPref:   bindStringFlag(fs, "label-prefix", "label-prefix", "", envLabelPref, "semver-", "Optional prefix for semver labels"),
 		labelMajor:  bindStringFlag(fs, "label-major", "label-major", "", envLabelMajor, "", "Override label name for major bumps"),

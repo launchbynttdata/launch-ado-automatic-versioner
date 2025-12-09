@@ -16,36 +16,40 @@ repos:
       - id: name-tests-test
       - id: requirements-txt-fixer
 
-  - repo: https://github.com/tekwizely/pre-commit-golang
-    rev: v1.0.0-rc.4
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.7.2
     hooks:
-      - id: go-fmt
       - id: golangci-lint
-      - id: go-mod-tidy
-      - id: go-test-mod
+
+  - repo: local
+    hooks:
       - id: go-vet
-
-  - repo: https://github.com/psf/black
-    rev: 25.1.0
-    hooks:
-      - id: black
-        language_version: python3
-        types: [python]
-
-  - repo: https://github.com/pycqa/isort
-    rev: 6.0.1
-    hooks:
-      - id: isort
-        types: [python]
-
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.17.1
-    hooks:
-      - id: mypy
-        types: [python]
-
-  - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: v0.12.12
-    hooks:
-      - id: ruff
-        args: [--fix, --exit-non-zero-on-fix]
+        name: go vet
+        language: system
+        entry: bash -c 'go vet ./...'
+        pass_filenames: false
+        types: [go]
+      - id: go-fmt
+        name: go fmt
+        language: system
+        entry: bash -c 'go fmt ./...'
+        pass_filenames: false
+        types: [go]
+      - id: go-mod-tidy
+        name: go mod tidy
+        language: system
+        entry: bash -c 'go mod tidy'
+        pass_filenames: false
+        types: [go]
+      - id: go-test-mod
+        name: go test mod
+        language: system
+        entry: bash -c 'go test ./...'
+        pass_filenames: false
+        types: [go]
+      - id: go-sec
+        name: go security check
+        language: system
+        entry: bash -c 'go install github.com/securego/gosec/v2/cmd/gosec@latest && gosec ./...'
+        pass_filenames: false
+        types: [go]
