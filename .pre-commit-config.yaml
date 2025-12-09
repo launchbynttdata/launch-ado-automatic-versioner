@@ -1,0 +1,55 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-docstring-first
+      - id: check-json
+      - id: check-toml
+      - id: debug-statements
+      - id: detect-private-key
+      - id: name-tests-test
+      - id: requirements-txt-fixer
+
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.7.2
+    hooks:
+      - id: golangci-lint
+
+  - repo: local
+    hooks:
+      - id: go-vet
+        name: go vet
+        language: system
+        entry: bash -c 'go vet ./...'
+        pass_filenames: false
+        types: [go]
+      - id: go-fmt
+        name: go fmt
+        language: system
+        entry: bash -c 'go fmt ./...'
+        pass_filenames: false
+        types: [go]
+      - id: go-mod-tidy
+        name: go mod tidy
+        language: system
+        entry: bash -c 'go mod tidy'
+        pass_filenames: false
+        types: [go]
+      - id: go-test-mod
+        name: go test mod
+        language: system
+        entry: bash -c 'go test ./...'
+        pass_filenames: false
+        types: [go]
+      - id: go-sec
+        name: go security check
+        language: system
+        entry: bash -c 'go install github.com/securego/gosec/v2/cmd/gosec@latest && gosec ./...'
+        pass_filenames: false
+        types: [go]
