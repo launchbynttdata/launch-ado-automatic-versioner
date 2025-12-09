@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Embedded semantic version/build date metadata via ldflags, exposed through a new `aav version` command.
+- Introduced a reusable `internal/cli` package plus a root-level `main.go` so the tool can be installed directly via `go install github.com/launchbynttdata/launch-ado-automatic-versioner@<version>`.
 
 ### Security
 
