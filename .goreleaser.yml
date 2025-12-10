@@ -37,9 +37,7 @@ builds:
 
     # Linker flags for smaller binaries and version info
     ldflags:
-      - "-s -w"
-      - "-X github.com/launchbynttdata/launch-ado-automatic-versioner/internal/version.Version={{.Version}}"
-      - "-X github.com/launchbynttdata/launch-ado-automatic-versioner/internal/version.BuildDate={{.Date}}"
+      - "-s -w -X github.com/launchbynttdata/launch-ado-automatic-versioner/internal/version.Version={{.Version}} -X github.com/launchbynttdata/launch-ado-automatic-versioner/internal/version.BuildDate={{.Date}}"
 
 archives:
   - id: "default"
