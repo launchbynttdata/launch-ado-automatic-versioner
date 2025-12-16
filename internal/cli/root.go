@@ -49,6 +49,7 @@ const (
 	envTaggerName      = "AAV_TAGGER_NAME"
 	envTaggerEmail     = "AAV_TAGGER_EMAIL"
 	envTagPrefix       = "AAV_TAG_PREFIX"
+	envUseFloatingTags = "AAV_USE_FLOATING_TAGS"
 	requiredFlagFormat = "%s is required"
 )
 
@@ -60,6 +61,7 @@ const (
 	flagTagMessage     = "tag-message"
 	flagTaggerName     = "tagger-name"
 	flagTaggerEmail    = "tagger-email"
+	flagUseFloating    = "use-floating-tags"
 	defaultTaggerName  = "aav"
 	defaultTaggerEmail = "aav@example.com"
 )
@@ -96,6 +98,7 @@ type tagFlagSet struct {
 	taggerName  *stringFlag
 	taggerEmail *stringFlag
 	tagPrefix   *stringFlag
+	useFloating *boolFlag
 }
 
 type runtimeConfig struct {
@@ -342,6 +345,28 @@ func newTagCommand(rootFlags *rootFlagSet) *cobra.Command {
 		}
 		log.Info("annotated tag created")
 
+		if result.Mode == tagplan.ModeRelease {
+			f := result.Floating
+			switch {
+			case f.Enabled:
+				floatingLog := runtime.logger.With(zap.String("floatingTag", f.TagName))
+				if f.DeletedExisting {
+					floatingLog = floatingLog.With(zap.Bool("replaced", true))
+				}
+				if f.AutoDetected && !createCfg.UseFloatingTags {
+					floatingLog = floatingLog.With(
+						zap.Bool("autoEnabled", true),
+						zap.Uint64("detectedMajor", f.AutoDetectedMajor),
+					)
+				}
+				floatingLog.Info("floating tag updated")
+			case createCfg.UseFloatingTags:
+				runtime.logger.Warn("floating tag requested but not applied", zap.String("reason", "floating tags only apply to release mode"))
+			case f.AutoDetected:
+				runtime.logger.Info("floating tag usage detected", zap.Uint64("floatingMajor", f.AutoDetectedMajor))
+			}
+		}
+
 		if _, err := fmt.Fprintln(cmd.OutOrStdout(), result.TagName); err != nil {
 			return fmt.Errorf("writing tag result: %w", err)
 		}
@@ -362,6 +387,7 @@ func bindTagFlags(cmd *cobra.Command) *tagFlagSet {
 		taggerName:  bindStringFlag(fs, flagTaggerName, flagTaggerName, "", envTaggerName, defaultTaggerName, "Name recorded as the tagger"),
 		taggerEmail: bindStringFlag(fs, flagTaggerEmail, flagTaggerEmail, "", envTaggerEmail, defaultTaggerEmail, "Email recorded as the tagger"),
 		tagPrefix:   bindStringFlag(fs, "tag-prefix", "tag-prefix", "", envTagPrefix, "", "String prepended to computed tag names (e.g. 'v')"),
+		useFloating: bindBoolFlag(fs, flagUseFloating, flagUseFloating, "", envUseFloatingTags, false, "Create/maintain floating major refs (v<major>)"),
 	}
 }
 
@@ -403,11 +429,21 @@ func (f *tagFlagSet) resolve(resolver config.Resolver) (tagging.CreateConfig, er
 
 	message := strings.TrimSpace(f.message.Value(resolver))
 
+	useFloating := false
+	if f.useFloating != nil {
+		value, err := f.useFloating.Value(resolver)
+		if err != nil {
+			return tagging.CreateConfig{}, err
+		}
+		useFloating = value
+	}
+
 	return tagging.CreateConfig{
 		Config: tagging.Config{
-			Mode:        mode,
-			Bump:        bumpIntent,
-			BaseVersion: baseVersion,
+			Mode:            mode,
+			Bump:            bumpIntent,
+			BaseVersion:     baseVersion,
+			UseFloatingTags: useFloating,
 		},
 		CommitSHA:   commit,
 		Message:     message,
