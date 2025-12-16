@@ -23,9 +23,10 @@ var (
 
 // Config captures the inputs required to compute the next tag.
 type Config struct {
-	Mode        tagplan.Mode
-	Bump        bump.Bump
-	BaseVersion string
+	Mode            tagplan.Mode
+	Bump            bump.Bump
+	BaseVersion     string
+	UseFloatingTags bool
 }
 
 // CreateConfig extends Config with the metadata required to create the annotated tag.
@@ -106,6 +107,12 @@ func (s Service) PlanAndCreate(ctx context.Context, cfg CreateConfig) (tagplan.R
 		return tagplan.Result{}, fmt.Errorf("creating annotated tag: %w", err)
 	}
 
+	if plan.Mode == tagplan.ModeRelease {
+		if err := s.applyFloatingTag(ctx, cfg, &plan, spec); err != nil {
+			return tagplan.Result{}, err
+		}
+	}
+
 	return plan, nil
 }
 
@@ -116,7 +123,46 @@ func toPlannerTags(refs []ado.Ref) []tagplan.Tag {
 
 	tags := make([]tagplan.Tag, 0, len(refs))
 	for _, ref := range refs {
-		tags = append(tags, tagplan.Tag{Name: ref.Name})
+		tags = append(tags, tagplan.Tag{Name: ref.Name, ObjectID: ref.ObjectID})
 	}
 	return tags
+}
+
+func (s Service) applyFloatingTag(ctx context.Context, cfg CreateConfig, plan *tagplan.Result, releaseSpec ado.TagSpec) error {
+	if plan == nil {
+		return nil
+	}
+
+	enabled := cfg.UseFloatingTags || plan.Floating.AutoDetected
+	if !enabled {
+		return nil
+	}
+
+	plan.Floating.Enabled = true
+
+	floatingName := strings.TrimSpace(plan.Floating.TagName)
+	if floatingName == "" {
+		floatingName = fmt.Sprintf("v%d", plan.Version.Major)
+		plan.Floating.TagName = floatingName
+	}
+
+	spec := releaseSpec
+	spec.Name = floatingName
+
+	if existingName := strings.TrimSpace(plan.Floating.Existing.Name); existingName != "" {
+		objectID := strings.TrimSpace(plan.Floating.Existing.ObjectID)
+		if objectID == "" {
+			return fmt.Errorf("floating tag %s missing object id", existingName)
+		}
+		if err := s.client.DeleteRef(ctx, existingName, objectID); err != nil {
+			return fmt.Errorf("deleting floating tag %s: %w", existingName, err)
+		}
+		plan.Floating.DeletedExisting = true
+	}
+
+	if err := s.client.CreateAnnotatedTag(ctx, spec); err != nil {
+		return fmt.Errorf("creating floating tag %s: %w", spec.Name, err)
+	}
+	plan.Floating.Created = true
+	return nil
 }

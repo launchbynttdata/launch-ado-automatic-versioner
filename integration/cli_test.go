@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	semver "github.com/blang/semver/v4"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/domain/branchmap"
 	azuredevops "github.com/microsoft/azure-devops-go-api/azuredevops/v7"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/git"
@@ -49,6 +50,7 @@ const (
 	envBranchMajor    = "AAV_BRANCH_MAJOR_PREFIXES"
 	envBranchMinor    = "AAV_BRANCH_MINOR_PREFIXES"
 	envBranchPatch    = "AAV_BRANCH_PATCH_PREFIXES"
+	envUseFloating    = "AAV_USE_FLOATING_TAGS"
 )
 
 const (
@@ -116,6 +118,10 @@ func runReleaseAndRcScenario(t *testing.T, cfg envConfig) {
 	releaseTag := h.createTagWithCLI(t, mergeCommit, "release", cfg.ExpectedBump)
 	h.registerTag(releaseTag)
 
+	if floating := h.assertFloatingTag(t, releaseTag, mergeCommit); floating != "" {
+		h.registerTag(floating)
+	}
+
 	rcTag := h.createTagWithCLI(t, mergeCommit, "rc", cfg.ExpectedBump)
 	h.registerTag(rcTag)
 }
@@ -136,6 +142,7 @@ type envConfig struct {
 	BadCommitSHA   string
 	BadPRID        string
 	BranchPrefixes branchPrefixConfig
+	UseFloatingTag bool
 }
 
 func loadConfig(t *testing.T) envConfig {
@@ -160,6 +167,7 @@ func loadConfig(t *testing.T) envConfig {
 		BadCommitSHA:   optionalEnv(envBadCommit, defaultBadCommit),
 		BadPRID:        optionalEnv(envBadPRID, defaultBadPRID),
 		BranchPrefixes: loadBranchPrefixConfig(),
+		UseFloatingTag: parseBoolEnv(envUseFloating),
 	}
 }
 
@@ -250,14 +258,18 @@ func (h *workflowHarness) runWorkflowAndMerge(t *testing.T, prID int, branch str
 }
 
 func (h *workflowHarness) createTagWithCLI(t *testing.T, commit, mode, bump string) string {
-	stdout, stderr, err := h.runCLI(t, []string{"create-tag"}, map[string]string{
+	overrides := map[string]string{
 		envCommit:      commit,
 		envTagMode:     mode,
 		envBump:        bump,
 		envTaggerName:  h.cfg.TaggerName,
 		envTaggerEmail: h.cfg.TaggerEmail,
 		envTagMessage:  fmt.Sprintf("integration %s", mode),
-	})
+	}
+	if mode == "release" && h.cfg.UseFloatingTag {
+		overrides[envUseFloating] = "true"
+	}
+	stdout, stderr, err := h.runCLI(t, []string{"create-tag"}, overrides)
 	if err != nil {
 		t.Fatalf("create-tag (%s) failed: %v\nstderr: %s", mode, err, stderr)
 	}
@@ -269,6 +281,39 @@ func (h *workflowHarness) createTagWithCLI(t *testing.T, commit, mode, bump stri
 
 func (h *workflowHarness) registerTag(tag string) {
 	h.tags = append(h.tags, tag)
+}
+
+func (h *workflowHarness) assertFloatingTag(t *testing.T, releaseTag, releaseCommit string) string {
+	t.Helper()
+	if !h.cfg.UseFloatingTag {
+		return ""
+	}
+
+	trimmedCommit := strings.TrimSpace(releaseCommit)
+	if trimmedCommit == "" {
+		t.Fatalf("release commit is empty while asserting floating tag")
+	}
+
+	releaseTarget := h.git.remoteTagCommit(t, releaseTag)
+	if releaseTarget == "" {
+		t.Fatalf("release tag %s not found on remote", releaseTag)
+	}
+	if releaseTarget != trimmedCommit {
+		t.Fatalf("release tag %s references %s; expected %s", releaseTag, releaseTarget, trimmedCommit)
+	}
+
+	version := parseReleaseVersion(t, releaseTag, h.cfg.TagPrefix)
+	floatingTag := fmt.Sprintf("v%d", version.Major)
+	floatingTarget := h.git.remoteTagCommit(t, floatingTag)
+	if floatingTarget == "" {
+		t.Fatalf("floating tag %s not found on remote", floatingTag)
+	}
+	if floatingTarget != trimmedCommit {
+		t.Fatalf("floating tag %s references %s; expected %s", floatingTag, floatingTarget, trimmedCommit)
+	}
+
+	h.t.Logf("floating tag %s references release commit %s", floatingTag, trimmedCommit)
+	return floatingTag
 }
 
 func (h *workflowHarness) runCLI(t *testing.T, args []string, overrides map[string]string) (string, string, error) {
@@ -368,6 +413,42 @@ func (w *gitWorkspace) deleteRemoteTag(t *testing.T, tag string) {
 		}
 	}
 	w.run(t, "push", "origin", fmt.Sprintf(":refs/tags/%s", tag))
+}
+
+func (w *gitWorkspace) remoteTagCommit(t *testing.T, tag string) string {
+	t.Helper()
+	trimmed := strings.TrimSpace(tag)
+	if trimmed == "" {
+		return ""
+	}
+	cmd := exec.Command("git", "ls-remote", "--tags", "origin", trimmed)
+	cmd.Dir = w.dir
+	cmd.Env = append(os.Environ(), gitTerminalPromptOff)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git ls-remote --tags origin %s failed: %s", trimmed, sanitizeOutput(output, w.cfg.Token))
+	}
+	text := strings.TrimSpace(string(output))
+	if text == "" {
+		return ""
+	}
+	ref := fmt.Sprintf("refs/tags/%s", trimmed)
+	var commit string
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		switch fields[1] {
+		case ref + "^{}":
+			return fields[0]
+		case ref:
+			if commit == "" {
+				commit = fields[0]
+			}
+		}
+	}
+	return commit
 }
 
 func (w *gitWorkspace) run(t *testing.T, args ...string) {
@@ -629,6 +710,23 @@ func orderedBumpCoverage(primary string) []string {
 		add(candidate)
 	}
 	return ordered
+}
+
+func parseReleaseVersion(t *testing.T, tagName, prefix string) semver.Version {
+	t.Helper()
+	value := strings.TrimSpace(tagName)
+	if value == "" {
+		t.Fatalf("release tag name is empty")
+	}
+	prefix = strings.TrimSpace(prefix)
+	if prefix != "" && strings.HasPrefix(value, prefix) {
+		value = strings.TrimPrefix(value, prefix)
+	}
+	version, err := semver.Parse(strings.TrimSpace(value))
+	if err != nil {
+		t.Fatalf("parsing release tag %s (prefix %q): %v", tagName, prefix, err)
+	}
+	return version
 }
 
 func projectRoot(t *testing.T) string {
