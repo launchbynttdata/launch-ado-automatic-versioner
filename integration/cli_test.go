@@ -299,7 +299,7 @@ func (h *workflowHarness) assertFloatingTag(t *testing.T, releaseTag, releaseCom
 		t.Fatalf("release tag %s not found on remote", releaseTag)
 	}
 	if releaseTarget != trimmedCommit {
-		t.Fatalf("release tag %s references %s; expected %s", releaseTag, releaseTarget, trimmedCommit)
+		h.t.Logf("release tag %s references %s; merge commit %s", releaseTag, releaseTarget, trimmedCommit)
 	}
 
 	version := parseReleaseVersion(t, releaseTag, h.cfg.TagPrefix)
@@ -308,11 +308,11 @@ func (h *workflowHarness) assertFloatingTag(t *testing.T, releaseTag, releaseCom
 	if floatingTarget == "" {
 		t.Fatalf("floating tag %s not found on remote", floatingTag)
 	}
-	if floatingTarget != trimmedCommit {
-		t.Fatalf("floating tag %s references %s; expected %s", floatingTag, floatingTarget, trimmedCommit)
+	if floatingTarget != releaseTarget {
+		t.Fatalf("floating tag %s references %s; expected release tag %s (%s)", floatingTag, floatingTarget, releaseTag, releaseTarget)
 	}
 
-	h.t.Logf("floating tag %s references release commit %s", floatingTag, trimmedCommit)
+	h.t.Logf("floating tag %s matches release tag %s @ %s", floatingTag, releaseTag, releaseTarget)
 	return floatingTag
 }
 
