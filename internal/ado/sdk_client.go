@@ -60,6 +60,7 @@ func (c *sdkClient) ListRefsWithPrefix(ctx context.Context, prefix string) ([]Re
 	var continuation *string
 	var results []Ref
 
+	peelTags := true
 	for {
 		args := git.GetRefsArgs{
 			Project:      c.project,
@@ -71,6 +72,7 @@ func (c *sdkClient) ListRefsWithPrefix(ctx context.Context, prefix string) ([]Re
 		if continuation != nil {
 			args.ContinuationToken = continuation
 		}
+		args.PeelTags = &peelTags
 
 		resp, err := c.git.GetRefs(ctx, args)
 		if err != nil {
@@ -244,9 +246,14 @@ func convertGitRefs(values []git.GitRef) []Ref {
 	}
 	refs := make([]Ref, 0, len(values))
 	for _, r := range values {
+		name := strings.TrimSpace(derefString(r.Name))
+		objectID := strings.TrimSpace(derefString(r.PeeledObjectId))
+		if objectID == "" {
+			objectID = strings.TrimSpace(derefString(r.ObjectId))
+		}
 		refs = append(refs, Ref{
-			Name:     strings.TrimSpace(derefString(r.Name)),
-			ObjectID: strings.TrimSpace(derefString(r.ObjectId)),
+			Name:     name,
+			ObjectID: objectID,
 		})
 	}
 	return refs

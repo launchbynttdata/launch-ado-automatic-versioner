@@ -54,18 +54,20 @@ const (
 )
 
 const (
-	defaultTargetBranch  = "main"
-	defaultAuthorName    = "aav-integration"
-	defaultAuthorEmail   = "aav-integration@example.com"
-	defaultTaggerName    = "aav-integration"
-	defaultTaggerEmail   = "aav-integration@example.com"
-	defaultExpectedBump  = "minor"
-	defaultBadCommit     = "0000000000000000000000000000000000000000"
-	defaultBadPRID       = "999999999"
-	workflowTimeout      = 10 * time.Minute
-	pollInterval         = 5 * time.Second
-	integrationDir       = "integration-artifacts"
-	gitTerminalPromptOff = "GIT_TERMINAL_PROMPT=0"
+	defaultTargetBranch    = "main"
+	defaultAuthorName      = "aav-integration"
+	defaultAuthorEmail     = "aav-integration@example.com"
+	defaultTaggerName      = "aav-integration"
+	defaultTaggerEmail     = "aav-integration@example.com"
+	defaultExpectedBump    = "minor"
+	defaultBadCommit       = "0000000000000000000000000000000000000000"
+	defaultBadPRID         = "999999999"
+	workflowTimeout        = 10 * time.Minute
+	pollInterval           = 5 * time.Second
+	integrationDir         = "integration-artifacts"
+	gitTerminalPromptOff   = "GIT_TERMINAL_PROMPT=0"
+	floatingVerifyTimeout  = 2 * time.Minute
+	floatingVerifyInterval = 3 * time.Second
 )
 
 func TestIntegrationWorkflowCreatesReleaseAndRCTags(t *testing.T) {
@@ -181,6 +183,19 @@ type workflowHarness struct {
 	tags   []string
 }
 
+type refState struct {
+	Ref            string
+	ObjectID       string
+	PeeledObjectID string
+}
+
+func (r refState) commitID() string {
+	if r.PeeledObjectID != "" {
+		return r.PeeledObjectID
+	}
+	return r.ObjectID
+}
+
 func newWorkflowHarness(t *testing.T, ctx context.Context, cfg envConfig) *workflowHarness {
 	gitDir := cloneRepository(t, cfg)
 	adoClient, err := newADOClient(ctx, cfg)
@@ -294,9 +309,11 @@ func (h *workflowHarness) assertFloatingTag(t *testing.T, releaseTag, releaseCom
 		t.Fatalf("release commit is empty while asserting floating tag")
 	}
 
-	releaseTarget := h.git.remoteTagCommit(t, releaseTag)
+	releaseRef := tagRefName(releaseTag)
+	releaseState := h.waitForRefState(t, releaseRef)
+	releaseTarget := releaseState.commitID()
 	if releaseTarget == "" {
-		t.Fatalf("release tag %s not found on remote", releaseTag)
+		t.Fatalf("release tag %s missing peeled commit", releaseTag)
 	}
 	if releaseTarget != trimmedCommit {
 		h.t.Logf("release tag %s references %s; merge commit %s", releaseTag, releaseTarget, trimmedCommit)
@@ -304,16 +321,64 @@ func (h *workflowHarness) assertFloatingTag(t *testing.T, releaseTag, releaseCom
 
 	version := parseReleaseVersion(t, releaseTag, h.cfg.TagPrefix)
 	floatingTag := fmt.Sprintf("v%d", version.Major)
-	floatingTarget := h.git.remoteTagCommit(t, floatingTag)
-	if floatingTarget == "" {
-		t.Fatalf("floating tag %s not found on remote", floatingTag)
-	}
-	if floatingTarget != releaseTarget {
-		t.Fatalf("floating tag %s references %s; expected release tag %s (%s)", floatingTag, floatingTarget, releaseTag, releaseTarget)
-	}
-
-	h.t.Logf("floating tag %s matches release tag %s @ %s", floatingTag, releaseTag, releaseTarget)
+	floatingRef := tagRefName(floatingTag)
+	floatingState := h.waitForRefMatch(t, floatingRef, releaseTarget)
+	h.t.Logf("floating tag %s matches release tag %s @ %s", floatingTag, releaseTag, floatingState.commitID())
 	return floatingTag
+}
+
+func tagRefName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return ""
+	}
+	return fmt.Sprintf("refs/tags/%s", trimmed)
+}
+
+func (h *workflowHarness) waitForRefState(t *testing.T, ref string) refState {
+	deadline := time.Now().Add(floatingVerifyTimeout)
+	var lastErr error
+	for {
+		state, err := h.ado.refState(h.ctx, ref)
+		if err == nil && state.ObjectID != "" {
+			return state
+		}
+		if err != nil {
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				t.Fatalf("timed out waiting for ref %s: %v", ref, lastErr)
+			}
+			t.Fatalf("timed out waiting for ref %s to appear", ref)
+		}
+		time.Sleep(floatingVerifyInterval)
+	}
+}
+
+func (h *workflowHarness) waitForRefMatch(t *testing.T, ref string, expected string) refState {
+	deadline := time.Now().Add(floatingVerifyTimeout)
+	var lastObserved refState
+	for {
+		state, err := h.ado.refState(h.ctx, ref)
+		commitID := state.commitID()
+		if err == nil && commitID == expected {
+			return state
+		}
+		if err == nil && commitID != "" {
+			lastObserved = state
+		}
+		if err != nil {
+			h.t.Logf("waiting for %s to match %s: %v", ref, expected, err)
+		}
+		if time.Now().After(deadline) {
+			if lastObserved.commitID() == "" {
+				t.Fatalf("timed out waiting for ref %s to match release object %s", ref, expected)
+			}
+			t.Fatalf("ref %s last observed at %s; expected %s", ref, lastObserved.commitID(), expected)
+		}
+		time.Sleep(floatingVerifyInterval)
+	}
 }
 
 func (h *workflowHarness) runCLI(t *testing.T, args []string, overrides map[string]string) (string, string, error) {
@@ -413,42 +478,6 @@ func (w *gitWorkspace) deleteRemoteTag(t *testing.T, tag string) {
 		}
 	}
 	w.run(t, "push", "origin", fmt.Sprintf(":refs/tags/%s", tag))
-}
-
-func (w *gitWorkspace) remoteTagCommit(t *testing.T, tag string) string {
-	t.Helper()
-	trimmed := strings.TrimSpace(tag)
-	if trimmed == "" {
-		return ""
-	}
-	cmd := exec.Command("git", "ls-remote", "--tags", "origin", trimmed)
-	cmd.Dir = w.dir
-	cmd.Env = append(os.Environ(), gitTerminalPromptOff)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git ls-remote --tags origin %s failed: %s", trimmed, sanitizeOutput(output, w.cfg.Token))
-	}
-	text := strings.TrimSpace(string(output))
-	if text == "" {
-		return ""
-	}
-	ref := fmt.Sprintf("refs/tags/%s", trimmed)
-	var commit string
-	for _, line := range strings.Split(text, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) != 2 {
-			continue
-		}
-		switch fields[1] {
-		case ref + "^{}":
-			return fields[0]
-		case ref:
-			if commit == "" {
-				commit = fields[0]
-			}
-		}
-	}
-	return commit
 }
 
 func (w *gitWorkspace) run(t *testing.T, args ...string) {
@@ -579,6 +608,39 @@ func (c *adoWorkflowClient) getPullRequest(ctx context.Context, prID int) (*git.
 		return nil, err
 	}
 	return pr, nil
+}
+
+func (c *adoWorkflowClient) refState(ctx context.Context, ref string) (refState, error) {
+	desired := strings.TrimSpace(ref)
+	if desired == "" {
+		return refState{}, nil
+	}
+	filter := strings.TrimPrefix(desired, "refs/")
+	top := 100
+	args := git.GetRefsArgs{
+		Project:      &c.project,
+		RepositoryId: &c.repo,
+		Filter:       &filter,
+		Top:          &top,
+	}
+	peelTags := true
+	args.PeelTags = &peelTags
+	refs, err := c.git.GetRefs(ctx, args)
+	if err != nil {
+		return refState{}, err
+	}
+	for _, refInfo := range refs.Value {
+		if refInfo.Name == nil || *refInfo.Name != desired {
+			continue
+		}
+		state := refState{
+			Ref:            desired,
+			ObjectID:       strings.TrimSpace(stringValue(refInfo.ObjectId)),
+			PeeledObjectID: strings.TrimSpace(stringValue(refInfo.PeeledObjectId)),
+		}
+		return state, nil
+	}
+	return refState{}, nil
 }
 
 func isValidBump(value string) bool {
@@ -755,6 +817,13 @@ func authenticatedRemoteURL(cfg envConfig) string {
 	}
 	u.User = url.UserPassword("aav", cfg.Token)
 	return u.String()
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func randomSuffix() string {
