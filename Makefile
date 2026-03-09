@@ -1,6 +1,6 @@
 # This makefile provides targets that mirror the CI pipeline and help with development
 
-.PHONY: help test lint security vulnerability-check build clean setup deps verify mod-tidy-check all ci-local clean-template
+.PHONY: help test lint security vulnerability-check build clean setup deps verify mod-tidy-check all ci-local
 
 # =============================================================================
 # Configuration
@@ -8,10 +8,12 @@
 
 REQUIRED_GO_VERSION := $(shell awk '/^go[[:space:]]+/ {print $$2; exit}' go.mod)
 # BINARY_NAME := $(shell git rev-parse --show-toplevel | xargs basename)
-BINARY_NAME := "aav"
+BINARY_NAME := aav
 BUILD_DIR := ./bin
 MAIN_DIR ?= .
 GOVULNCHECK_VERSION ?= 1.1.4
+GOLANGCI_LINT_VERSION ?= v2.11.2
+GOSEC_VERSION ?= v2.21.0
 AAV_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 AAV_BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LD_FLAGS := -s -w \
@@ -48,10 +50,9 @@ endef
 help:
 	@echo "Available targets:"
 	@echo "  $(GREEN)Development targets:$(NC)"
-	@echo "    setup              - Install required tools and dependencies via asdf"
-	@echo "    deps               - Download and verify Go dependencies"
+	@echo "    setup              - Install required tools and dependencies via mise"
+	@echo "    deps               - Download and verify Go dependencies, install Go tools"
 	@echo "    clean              - Remove build artifacts"
-	@echo "    clean-template     - Clean up template code to prepare for new project"
 	@echo ""
 	@echo "  $(GREEN)Tool management targets:$(NC)"
 	@echo "    update-tool-versions - Update .tool-versions with latest versions"
@@ -98,58 +99,52 @@ help:
 # Development Setup
 # =============================================================================
 
-## setup: Install required development tools via asdf
+## setup: Install required development tools via mise
 setup: check-go-version
-	$(call print_info,Installing Go via asdf...)
-	@asdf plugin add golang || true
-	@asdf install golang || echo "Go already installed"
-	@asdf reshim
-	$(call print_info,Installing development tools via asdf...)
-	@asdf plugin add golangci-lint || true
-	@asdf plugin add gosec || true
-	@asdf plugin add govulncheck || true
-	$(call print_info,Installing Go development tools...)
-	@asdf install golang || echo "Go already installed"
-	@asdf install golangci-lint || echo "golangci-lint already installed"
-	@asdf install gosec || echo "gosec already installed"
-	@asdf install govulncheck || echo "govulncheck already installed"
-	@asdf reshim
-	$(call print_success,Development tools installed successfully!)
-	@make verify-tools
+	$(call print_info,Ensure Go is installed via: mise install)
+	@mise install || true
+	$(call print_info,Installing Go tools and dependencies...)
+	@$(MAKE) deps
+	$(call print_success,Development environment ready!)
+	@$(MAKE) verify-tools
 
 ## check-go-version: Verify Go version matches project requirements
 check-go-version:
 	$(call print_info,Checking Go version...)
 	@if [ -z "$(REQUIRED_GO_VERSION)" ]; then \
-		$(call print_error,Error: Unable to determine required Go version from go.mod); \
+		echo "$(RED)Error: Unable to determine required Go version from go.mod$(NC)"; \
 		exit 1; \
 	fi
 	@if ! command -v go >/dev/null 2>&1; then \
-		$(call print_error,Error: Go $(REQUIRED_GO_VERSION)+ required but Go is not installed or not on PATH.); \
+		echo "$(RED)Error: Go $(REQUIRED_GO_VERSION)+ required but Go is not installed or not on PATH.$(NC)"; \
 		exit 1; \
 	fi
 	@current_version_raw=$$(go env GOVERSION 2>/dev/null || go version | awk '{print $$3}'); \
 	current_version=$${current_version_raw#go}; \
 	required_version="$(REQUIRED_GO_VERSION)"; \
 	if [ -z "$$current_version" ]; then \
-		$(call print_error,Error: Unable to determine installed Go version.); \
+		echo "$(RED)Error: Unable to determine installed Go version.$(NC)"; \
 		go version || true; \
 		exit 1; \
 	fi; \
-	highest=$$(printf '%s\n%s\n' "$$required_version" "$$current_version" | sort -V | tail -1); \
+	highest=$$(printf '%s\n%s\n' "$$required_version" "$$current_version" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1); \
 	if [ "$$highest" != "$$current_version" ]; then \
-		$(call print_error,Error: Go version $$required_version or newer required. Current version: go$$current_version); \
-		$(call print_info,Please update Go using: asdf install); \
+		echo "$(RED)Error: Go version $$required_version or newer required. Current version: go$$current_version$(NC)"; \
+		echo "$(YELLOW)Please update Go using: mise install$(NC)"; \
 		exit 1; \
 	fi
 	$(call print_success,Go version check passed!)
 
-## deps: Download and verify dependencies
+## deps: Download and verify dependencies, install Go tools
 deps:
 	$(call print_info,Downloading dependencies...)
 	go mod download
 	$(call print_info,Verifying dependencies...)
 	go mod verify
+	$(call print_info,Installing Go tools...)
+	go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
+	go install golang.org/x/vuln/cmd/govulncheck@v$(GOVULNCHECK_VERSION)
 	$(call print_success,Dependencies ready!)
 
 ## verify: Verify the module and dependencies
@@ -167,19 +162,16 @@ verify-tools:
 	$(call print_info,Verifying development tools...)
 	@echo "Go version: $$(go version)"
 	@echo "golangci-lint version: $$(golangci-lint version)"
-	@if command -v govulncheck >/dev/null 2>&1 && govulncheck -version >/dev/null 2>&1; then \
-		echo "govulncheck version: $$(govulncheck -version)"; \
-	else \
-		echo "govulncheck version: fallback via go run v$(GOVULNCHECK_VERSION)"; \
-	fi
+	@echo "govulncheck version: $$(govulncheck -version 2>/dev/null || echo 'not installed')"
 	@echo "gosec version: $$(gosec -version 2>/dev/null || echo 'gosec not available')"
 	$(call print_success,Tool verification completed!)
 
 ## update-tool-versions: Update .tool-versions with latest versions (respects pinned versions)
 update-tool-versions:
 	$(call print_info,Updating .tool-versions with latest versions...)
+	@rm -f .tool-versions.tmp
 	@if [ ! -f .tool-versions ]; then \
-		$(call print_error,Error: .tool-versions file not found); \
+		echo "$(RED)Error: .tool-versions file not found$(NC)"; \
 		exit 1; \
 	fi
 	@cp .tool-versions .tool-versions.backup
@@ -190,7 +182,7 @@ update-tool-versions:
 		else \
 			tool=$$(echo "$$line" | awk '{print $$1}'); \
 			if [ -n "$$tool" ] && [ "$$tool" != "#" ]; then \
-				latest=$$(asdf latest "$$tool" 2>/dev/null || echo "unknown"); \
+				latest=$$(mise latest "$$tool" 2>/dev/null || echo "unknown"); \
 				if [ "$$latest" != "unknown" ] && ! echo "$$latest" | grep -q "unable to load\|does not have\|unknown"; then \
 					echo "$$tool $$latest" >> .tool-versions.tmp; \
 					echo "$(GREEN)Updated $$tool to $$latest$(NC)"; \
@@ -205,37 +197,37 @@ update-tool-versions:
 	done < .tool-versions
 	@mv .tool-versions.tmp .tool-versions
 	$(call print_success,Updated .tool-versions successfully!)
-	$(call print_info,Run 'asdf install' to install updated versions)
+	$(call print_info,Run 'mise install' to install updated versions)
 
-## pin-tool-version: Pin a specific tool version (usage: make pin-tool-version TOOL=golangci-lint VERSION=2.3.0)
+## pin-tool-version: Pin a specific tool version (usage: make pin-tool-version TOOL=golang VERSION=1.26.1)
 pin-tool-version:
 	@if [ -z "$(TOOL)" ] || [ -z "$(VERSION)" ]; then \
-		$(call print_error,Error: Usage: make pin-tool-version TOOL=toolname VERSION=version); \
-		$(call print_info,Example: make pin-tool-version TOOL=golangci-lint VERSION=2.3.0); \
+		echo "$(RED)Error: Usage: make pin-tool-version TOOL=toolname VERSION=version$(NC)"; \
+		echo "$(YELLOW)Example: make pin-tool-version TOOL=golang VERSION=1.26.1$(NC)"; \
 		exit 1; \
 	fi
 	$(call print_info,Pinning $(TOOL) to version $(VERSION)...)
 	@if [ ! -f .tool-versions ]; then \
-		$(call print_error,Error: .tool-versions file not found); \
+		echo "$(RED)Error: .tool-versions file not found$(NC)"; \
 		exit 1; \
 	fi
 	@sed -i.bak "s/^$(TOOL) .*/$(TOOL) $(VERSION) #pinned/" .tool-versions
 	@rm -f .tool-versions.bak
 	$(call print_success,Pinned $(TOOL) to $(VERSION))
 
-## unpin-tool-version: Unpin a specific tool version (usage: make unpin-tool-version TOOL=golangci-lint)
+## unpin-tool-version: Unpin a specific tool version (usage: make unpin-tool-version TOOL=golang)
 unpin-tool-version:
 	@if [ -z "$(TOOL)" ]; then \
-		$(call print_error,Error: Usage: make unpin-tool-version TOOL=toolname); \
-		$(call print_info,Example: make unpin-tool-version TOOL=golangci-lint); \
+		echo "$(RED)Error: Usage: make unpin-tool-version TOOL=toolname$(NC)"; \
+		echo "$(YELLOW)Example: make unpin-tool-version TOOL=golang$(NC)"; \
 		exit 1; \
 	fi
 	$(call print_info,Unpinning $(TOOL)...)
 	@if [ ! -f .tool-versions ]; then \
-		$(call print_error,Error: .tool-versions file not found); \
+		echo "$(RED)Error: .tool-versions file not found$(NC)"; \
 		exit 1; \
 	fi
-	@sed -i.bak "s/^$(TOOL) .* #pinned/$(TOOL) $$(asdf latest $(TOOL) 2>/dev/null || echo 'unknown')/" .tool-versions
+	@sed -i.bak "s/^$(TOOL) .* #pinned/$(TOOL) $$(mise latest $(TOOL) 2>/dev/null || echo 'unknown')/" .tool-versions
 	@rm -f .tool-versions.bak
 	$(call print_success,Unpinned $(TOOL))
 
@@ -261,9 +253,9 @@ lint: check-golangci-lint-version
 check-golangci-lint-version:
 	$(call print_info,Checking golangci-lint version...)
 	@if ! golangci-lint version | grep -q "version 2"; then \
-		$(call print_error,Error: golangci-lint version 2.x required. Current version:); \
+		echo "$(RED)Error: golangci-lint version 2.x required. Current version:$(NC)"; \
 		golangci-lint version; \
-		$(call print_info,Please run: asdf reshim golangci-lint); \
+		echo "$(YELLOW)Please run: make deps$(NC)"; \
 		exit 1; \
 	fi
 	$(call print_success,golangci-lint version check passed!)
@@ -277,7 +269,7 @@ security:
 ## vulnerability-check: Run govulncheck
 vulnerability-check:
 	$(call print_info,Checking for vulnerabilities...)
-	@./scripts/ensure_govulncheck.sh $(GOVULNCHECK_VERSION) ./...
+	govulncheck ./...
 	$(call print_success,Vulnerability check completed!)
 
 ## mod-tidy-check: Check if go mod tidy is needed
@@ -291,7 +283,7 @@ mod-tidy-check:
 		files="$$files go.sum"; \
 	fi; \
 	if ! git diff --exit-code $$files >/dev/null; then \
-		$(call print_error,Error: go module files are out of date. Please run 'go mod tidy' and commit the resulting changes.); \
+		echo "$(RED)Error: go module files are out of date. Please run 'go mod tidy' and commit the resulting changes.$(NC)"; \
 		exit 1; \
 	fi
 	$(call print_success,go.mod and go.sum are tidy!)
@@ -479,7 +471,7 @@ _validate-branch-sync:
 
 ## _get-latest-version: Internal target to get the latest version tag (excluding RCs)
 _get-latest-version:
-	@latest_tag=$$(git tag --list | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | sort -V | tail -1); \
+	@latest_tag=$$(git tag --list --sort=v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | tail -1); \
 	if [ -z "$$latest_tag" ]; then \
 		echo "v0.0.0"; \
 	else \
@@ -538,12 +530,12 @@ _create-release:
 ## list-versions: List all version tags
 list-versions:
 	$(call print_info,All version tags:)
-	@git tag --list | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | sort -V
+	@git tag --list --sort=v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+'
 
 ## list-rc-versions: List all release candidate tags
 list-rc-versions:
 	$(call print_info,All release candidate tags:)
-	@git tag --list | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+' | sort -V
+	@git tag --list --sort=v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+'
 
 ## next-version: Show what the next version would be (usage: make next-version TYPE=patch)
 next-version:
