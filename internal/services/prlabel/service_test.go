@@ -144,3 +144,7 @@ func (f *fakeClient) FindPullRequestByMergeCommit(context.Context, string) (int,
 func (f *fakeClient) CreateAnnotatedTag(context.Context, ado.TagSpec) error {
 	return nil
 }
+
+func (f *fakeClient) DeleteRef(context.Context, string, string) error {
+	return nil
+}

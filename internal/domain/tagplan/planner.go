@@ -35,7 +35,19 @@ const (
 
 // Tag represents a Git tag reference.
 type Tag struct {
-	Name string
+	Name     string
+	ObjectID string
+}
+
+// FloatingPlan captures detection and execution details for floating tags.
+type FloatingPlan struct {
+	TagName           string
+	Existing          Tag
+	AutoDetected      bool
+	AutoDetectedMajor uint64
+	Enabled           bool
+	DeletedExisting   bool
+	Created           bool
 }
 
 // Planner computes release and RC tagging plans from a set of tags.
@@ -57,6 +69,7 @@ type Result struct {
 	BaseSource    BaseSource
 	TargetRelease semver.Version
 	RCNumber      int
+	Floating      FloatingPlan
 }
 
 // PlanRelease determines the next release tag using the provided bump intent.
@@ -80,6 +93,7 @@ func (p Planner) PlanRelease(tags []Tag, intent bump.Bump, baseOverride string) 
 		ReleaseBase:   base,
 		BaseSource:    source,
 		TargetRelease: next,
+		Floating:      planFloating(catalog, next),
 	}, nil
 }
 
@@ -116,8 +130,19 @@ func (p Planner) PlanRC(tags []Tag, intent bump.Bump, baseOverride string) (Resu
 }
 
 type catalog struct {
-	releases    []semver.Version
+	releases    []releaseEntry
 	prereleases []semver.Version
+	floating    []floatingEntry
+}
+
+type releaseEntry struct {
+	version semver.Version
+	tag     Tag
+}
+
+type floatingEntry struct {
+	major uint64
+	tag   Tag
 }
 
 func buildCatalog(tags []Tag) catalog {
@@ -125,10 +150,13 @@ func buildCatalog(tags []Tag) catalog {
 	for _, tag := range tags {
 		version, ok := parseSemverTag(tag.Name)
 		if !ok {
+			if major, isFloating := parseFloatingTag(tag.Name); isFloating {
+				c.floating = append(c.floating, floatingEntry{major: major, tag: tag})
+			}
 			continue
 		}
 		if len(version.Pre) == 0 {
-			c.releases = append(c.releases, version)
+			c.releases = append(c.releases, releaseEntry{version: version, tag: tag})
 			continue
 		}
 		c.prereleases = append(c.prereleases, version)
@@ -174,12 +202,12 @@ func parseVersionString(input string) (semver.Version, error) {
 	return semver.Version{}, fmt.Errorf("invalid semver %q", input)
 }
 
-func chooseBaseRelease(releases []semver.Version, baseOverride string) (semver.Version, BaseSource, error) {
+func chooseBaseRelease(releases []releaseEntry, baseOverride string) (semver.Version, BaseSource, error) {
 	if len(releases) > 0 {
-		highest := releases[0]
+		highest := releases[0].version
 		for _, candidate := range releases[1:] {
-			if candidate.GT(highest) {
-				highest = candidate
+			if candidate.version.GT(highest) {
+				highest = candidate.version
 			}
 		}
 		return highest, BaseSourceExisting, nil
@@ -219,6 +247,64 @@ func bumpVersion(base semver.Version, intent bump.Bump) (semver.Version, error) 
 func (p Planner) formatTagName(version semver.Version) string {
 	prefix := strings.TrimSpace(p.tagPrefix)
 	return prefix + version.String()
+}
+
+func planFloating(c catalog, target semver.Version) FloatingPlan {
+	plan := FloatingPlan{TagName: floatingTagName(target.Major)}
+	if existing, ok := c.floatingTagForMajor(target.Major); ok {
+		plan.Existing = existing
+	}
+	if highest, ok := c.highestRelease(); ok {
+		plan.AutoDetectedMajor = highest.version.Major
+		plan.AutoDetected = c.hasValidFloatingForMajor(highest.version.Major)
+	}
+	return plan
+}
+
+func floatingTagName(major uint64) string {
+	return fmt.Sprintf("v%d", major)
+}
+
+func (c catalog) floatingTagForMajor(major uint64) (Tag, bool) {
+	for _, entry := range c.floating {
+		if entry.major == major {
+			return entry.tag, true
+		}
+	}
+	return Tag{}, false
+}
+
+func (c catalog) highestRelease() (releaseEntry, bool) {
+	if len(c.releases) == 0 {
+		return releaseEntry{}, false
+	}
+	highest := c.releases[0]
+	for _, candidate := range c.releases[1:] {
+		if candidate.version.GT(highest.version) {
+			highest = candidate
+		}
+	}
+	return highest, true
+}
+
+func (c catalog) hasValidFloatingForMajor(major uint64) bool {
+	for _, entry := range c.floating {
+		if entry.major != major {
+			continue
+		}
+		if entry.tag.ObjectID == "" {
+			continue
+		}
+		for _, release := range c.releases {
+			if release.version.Major != major {
+				continue
+			}
+			if release.tag.ObjectID != "" && release.tag.ObjectID == entry.tag.ObjectID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func nextRCNumber(target semver.Version, prereleases []semver.Version) int {
@@ -290,4 +376,29 @@ func attachRC(target semver.Version, rc int) (semver.Version, error) {
 	base.Build = nil
 
 	return base, nil
+}
+
+func parseFloatingTag(name string) (uint64, bool) {
+	trimmed := strings.TrimSpace(name)
+	trimmed = strings.TrimPrefix(trimmed, "refs/tags/")
+	if len(trimmed) <= 1 {
+		return 0, false
+	}
+	if trimmed[0] != 'v' && trimmed[0] != 'V' {
+		return 0, false
+	}
+	digits := trimmed[1:]
+	if digits == "" {
+		return 0, false
+	}
+	for _, ch := range digits {
+		if ch < '0' || ch > '9' {
+			return 0, false
+		}
+	}
+	value, err := strconv.ParseUint(digits, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
 }

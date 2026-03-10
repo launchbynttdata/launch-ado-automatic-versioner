@@ -38,6 +38,9 @@ type Client interface {
 	// (e.g. "refs/tags/"). The concrete client encapsulates organization/project/repo details.
 	ListRefsWithPrefix(ctx context.Context, prefix string) ([]Ref, error)
 
+	// DeleteRef removes the specified ref when the current object ID matches.
+	DeleteRef(ctx context.Context, name string, objectID string) error
+
 	// FindPullRequestByMergeCommit returns the pull request ID whose merge commit equals commitSHA.
 	FindPullRequestByMergeCommit(ctx context.Context, commitSHA string) (int, error)
 

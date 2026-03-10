@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2025-12-16
+
+### Added
+
+- Floating tag management for `create-tag --tag-mode release`, including the `--use-floating-tags` / `AAV_USE_FLOATING_TAGS` switch, automatic detection of existing floating refs, and annotated tag recreation so `v<major>` pointers always track the latest release.
+
+## [1.0.2] - 2025-12-10
 
 ### Added
 

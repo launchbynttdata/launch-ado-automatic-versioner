@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	semver "github.com/blang/semver/v4"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/domain/branchmap"
 	azuredevops "github.com/microsoft/azure-devops-go-api/azuredevops/v7"
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/git"
@@ -49,21 +50,24 @@ const (
 	envBranchMajor    = "AAV_BRANCH_MAJOR_PREFIXES"
 	envBranchMinor    = "AAV_BRANCH_MINOR_PREFIXES"
 	envBranchPatch    = "AAV_BRANCH_PATCH_PREFIXES"
+	envUseFloating    = "AAV_USE_FLOATING_TAGS"
 )
 
 const (
-	defaultTargetBranch  = "main"
-	defaultAuthorName    = "aav-integration"
-	defaultAuthorEmail   = "aav-integration@example.com"
-	defaultTaggerName    = "aav-integration"
-	defaultTaggerEmail   = "aav-integration@example.com"
-	defaultExpectedBump  = "minor"
-	defaultBadCommit     = "0000000000000000000000000000000000000000"
-	defaultBadPRID       = "999999999"
-	workflowTimeout      = 10 * time.Minute
-	pollInterval         = 5 * time.Second
-	integrationDir       = "integration-artifacts"
-	gitTerminalPromptOff = "GIT_TERMINAL_PROMPT=0"
+	defaultTargetBranch    = "main"
+	defaultAuthorName      = "aav-integration"
+	defaultAuthorEmail     = "aav-integration@example.com"
+	defaultTaggerName      = "aav-integration"
+	defaultTaggerEmail     = "aav-integration@example.com"
+	defaultExpectedBump    = "minor"
+	defaultBadCommit       = "0000000000000000000000000000000000000000"
+	defaultBadPRID         = "999999999"
+	workflowTimeout        = 10 * time.Minute
+	pollInterval           = 5 * time.Second
+	integrationDir         = "integration-artifacts"
+	gitTerminalPromptOff   = "GIT_TERMINAL_PROMPT=0"
+	floatingVerifyTimeout  = 2 * time.Minute
+	floatingVerifyInterval = 3 * time.Second
 )
 
 func TestIntegrationWorkflowCreatesReleaseAndRCTags(t *testing.T) {
@@ -116,6 +120,10 @@ func runReleaseAndRcScenario(t *testing.T, cfg envConfig) {
 	releaseTag := h.createTagWithCLI(t, mergeCommit, "release", cfg.ExpectedBump)
 	h.registerTag(releaseTag)
 
+	if floating := h.assertFloatingTag(t, releaseTag, mergeCommit); floating != "" {
+		h.registerTag(floating)
+	}
+
 	rcTag := h.createTagWithCLI(t, mergeCommit, "rc", cfg.ExpectedBump)
 	h.registerTag(rcTag)
 }
@@ -136,6 +144,7 @@ type envConfig struct {
 	BadCommitSHA   string
 	BadPRID        string
 	BranchPrefixes branchPrefixConfig
+	UseFloatingTag bool
 }
 
 func loadConfig(t *testing.T) envConfig {
@@ -160,6 +169,7 @@ func loadConfig(t *testing.T) envConfig {
 		BadCommitSHA:   optionalEnv(envBadCommit, defaultBadCommit),
 		BadPRID:        optionalEnv(envBadPRID, defaultBadPRID),
 		BranchPrefixes: loadBranchPrefixConfig(),
+		UseFloatingTag: parseBoolEnv(envUseFloating),
 	}
 }
 
@@ -171,6 +181,19 @@ type workflowHarness struct {
 	git    *gitWorkspace
 	ado    *adoWorkflowClient
 	tags   []string
+}
+
+type refState struct {
+	Ref            string
+	ObjectID       string
+	PeeledObjectID string
+}
+
+func (r refState) commitID() string {
+	if r.PeeledObjectID != "" {
+		return r.PeeledObjectID
+	}
+	return r.ObjectID
 }
 
 func newWorkflowHarness(t *testing.T, ctx context.Context, cfg envConfig) *workflowHarness {
@@ -250,14 +273,18 @@ func (h *workflowHarness) runWorkflowAndMerge(t *testing.T, prID int, branch str
 }
 
 func (h *workflowHarness) createTagWithCLI(t *testing.T, commit, mode, bump string) string {
-	stdout, stderr, err := h.runCLI(t, []string{"create-tag"}, map[string]string{
+	overrides := map[string]string{
 		envCommit:      commit,
 		envTagMode:     mode,
 		envBump:        bump,
 		envTaggerName:  h.cfg.TaggerName,
 		envTaggerEmail: h.cfg.TaggerEmail,
 		envTagMessage:  fmt.Sprintf("integration %s", mode),
-	})
+	}
+	if mode == "release" && h.cfg.UseFloatingTag {
+		overrides[envUseFloating] = "true"
+	}
+	stdout, stderr, err := h.runCLI(t, []string{"create-tag"}, overrides)
 	if err != nil {
 		t.Fatalf("create-tag (%s) failed: %v\nstderr: %s", mode, err, stderr)
 	}
@@ -269,6 +296,89 @@ func (h *workflowHarness) createTagWithCLI(t *testing.T, commit, mode, bump stri
 
 func (h *workflowHarness) registerTag(tag string) {
 	h.tags = append(h.tags, tag)
+}
+
+func (h *workflowHarness) assertFloatingTag(t *testing.T, releaseTag, releaseCommit string) string {
+	t.Helper()
+	if !h.cfg.UseFloatingTag {
+		return ""
+	}
+
+	trimmedCommit := strings.TrimSpace(releaseCommit)
+	if trimmedCommit == "" {
+		t.Fatalf("release commit is empty while asserting floating tag")
+	}
+
+	releaseRef := tagRefName(releaseTag)
+	releaseState := h.waitForRefState(t, releaseRef)
+	releaseTarget := releaseState.commitID()
+	if releaseTarget == "" {
+		t.Fatalf("release tag %s missing peeled commit", releaseTag)
+	}
+	if releaseTarget != trimmedCommit {
+		h.t.Logf("release tag %s references %s; merge commit %s", releaseTag, releaseTarget, trimmedCommit)
+	}
+
+	version := parseReleaseVersion(t, releaseTag, h.cfg.TagPrefix)
+	floatingTag := fmt.Sprintf("v%d", version.Major)
+	floatingRef := tagRefName(floatingTag)
+	floatingState := h.waitForRefMatch(t, floatingRef, releaseTarget)
+	h.t.Logf("floating tag %s matches release tag %s @ %s", floatingTag, releaseTag, floatingState.commitID())
+	return floatingTag
+}
+
+func tagRefName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return ""
+	}
+	return fmt.Sprintf("refs/tags/%s", trimmed)
+}
+
+func (h *workflowHarness) waitForRefState(t *testing.T, ref string) refState {
+	deadline := time.Now().Add(floatingVerifyTimeout)
+	var lastErr error
+	for {
+		state, err := h.ado.refState(h.ctx, ref)
+		if err == nil && state.ObjectID != "" {
+			return state
+		}
+		if err != nil {
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				t.Fatalf("timed out waiting for ref %s: %v", ref, lastErr)
+			}
+			t.Fatalf("timed out waiting for ref %s to appear", ref)
+		}
+		time.Sleep(floatingVerifyInterval)
+	}
+}
+
+func (h *workflowHarness) waitForRefMatch(t *testing.T, ref string, expected string) refState {
+	deadline := time.Now().Add(floatingVerifyTimeout)
+	var lastObserved refState
+	for {
+		state, err := h.ado.refState(h.ctx, ref)
+		commitID := state.commitID()
+		if err == nil && commitID == expected {
+			return state
+		}
+		if err == nil && commitID != "" {
+			lastObserved = state
+		}
+		if err != nil {
+			h.t.Logf("waiting for %s to match %s: %v", ref, expected, err)
+		}
+		if time.Now().After(deadline) {
+			if lastObserved.commitID() == "" {
+				t.Fatalf("timed out waiting for ref %s to match release object %s", ref, expected)
+			}
+			t.Fatalf("ref %s last observed at %s; expected %s", ref, lastObserved.commitID(), expected)
+		}
+		time.Sleep(floatingVerifyInterval)
+	}
 }
 
 func (h *workflowHarness) runCLI(t *testing.T, args []string, overrides map[string]string) (string, string, error) {
@@ -500,6 +610,39 @@ func (c *adoWorkflowClient) getPullRequest(ctx context.Context, prID int) (*git.
 	return pr, nil
 }
 
+func (c *adoWorkflowClient) refState(ctx context.Context, ref string) (refState, error) {
+	desired := strings.TrimSpace(ref)
+	if desired == "" {
+		return refState{}, nil
+	}
+	filter := strings.TrimPrefix(desired, "refs/")
+	top := 100
+	args := git.GetRefsArgs{
+		Project:      &c.project,
+		RepositoryId: &c.repo,
+		Filter:       &filter,
+		Top:          &top,
+	}
+	peelTags := true
+	args.PeelTags = &peelTags
+	refs, err := c.git.GetRefs(ctx, args)
+	if err != nil {
+		return refState{}, err
+	}
+	for _, refInfo := range refs.Value {
+		if refInfo.Name == nil || *refInfo.Name != desired {
+			continue
+		}
+		state := refState{
+			Ref:            desired,
+			ObjectID:       strings.TrimSpace(stringValue(refInfo.ObjectId)),
+			PeeledObjectID: strings.TrimSpace(stringValue(refInfo.PeeledObjectId)),
+		}
+		return state, nil
+	}
+	return refState{}, nil
+}
+
 func isValidBump(value string) bool {
 	switch value {
 	case "major", "minor", "patch":
@@ -631,6 +774,23 @@ func orderedBumpCoverage(primary string) []string {
 	return ordered
 }
 
+func parseReleaseVersion(t *testing.T, tagName, prefix string) semver.Version {
+	t.Helper()
+	value := strings.TrimSpace(tagName)
+	if value == "" {
+		t.Fatalf("release tag name is empty")
+	}
+	prefix = strings.TrimSpace(prefix)
+	if prefix != "" && strings.HasPrefix(value, prefix) {
+		value = strings.TrimPrefix(value, prefix)
+	}
+	version, err := semver.Parse(strings.TrimSpace(value))
+	if err != nil {
+		t.Fatalf("parsing release tag %s (prefix %q): %v", tagName, prefix, err)
+	}
+	return version
+}
+
 func projectRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -657,6 +817,13 @@ func authenticatedRemoteURL(cfg envConfig) string {
 	}
 	u.User = url.UserPassword("aav", cfg.Token)
 	return u.String()
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func randomSuffix() string {

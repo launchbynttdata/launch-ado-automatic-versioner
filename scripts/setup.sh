@@ -24,32 +24,11 @@ fi
 GO_VERSION=$(go version | awk '{print $3}' | sed 's/go//')
 echo -e "${GREEN}Found Go version: ${GO_VERSION}${NC}"
 
-# Check if required tools are installed
-echo -e "${YELLOW}Checking required development tools...${NC}"
-
-# Install golangci-lint if not present
-if ! command -v golangci-lint &> /dev/null; then
-    echo -e "${YELLOW}Installing golangci-lint...${NC}"
-    curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin latest
-else
-    echo -e "${GREEN}golangci-lint is already installed${NC}"
-fi
-
-# Install govulncheck if not present
-if ! command -v govulncheck &> /dev/null; then
-    echo -e "${YELLOW}Installing govulncheck...${NC}"
-    go install golang.org/x/vuln/cmd/govulncheck@latest
-else
-    echo -e "${GREEN}govulncheck is already installed${NC}"
-fi
-
-# Install gosec if not present
-if ! command -v gosec &> /dev/null; then
-    echo -e "${YELLOW}Installing gosec...${NC}"
-    go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
-else
-    echo -e "${GREEN}gosec is already installed${NC}"
-fi
+# Install Go tools and dependencies via Makefile
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+echo -e "${YELLOW}Installing Go tools and dependencies...${NC}"
+(cd "$PROJECT_ROOT" && make deps)
 
 # Install pre-commit if not present
 if ! command -v pre-commit &> /dev/null; then
@@ -65,11 +44,6 @@ if ! command -v pre-commit &> /dev/null; then
 else
     echo -e "${GREEN}pre-commit is already installed${NC}"
 fi
-
-# Download Go dependencies
-echo -e "${YELLOW}Downloading Go dependencies...${NC}"
-go mod download
-go mod verify
 
 # Install pre-commit hooks
 if command -v pre-commit &> /dev/null; then

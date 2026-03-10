@@ -113,6 +113,72 @@ func TestPlanRCAllocatesNextSequence(t *testing.T) {
 	}
 }
 
+func TestPlanReleaseFloatingDetection(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner("v")
+	tags := []Tag{
+		{Name: "refs/tags/v1.2.3", ObjectID: "abc"},
+		{Name: "refs/tags/v1", ObjectID: "abc"},
+	}
+
+	result, err := planner.PlanRelease(tags, bump.BumpPatch, "")
+	if err != nil {
+		t.Fatalf(errPlanRelease, err)
+	}
+
+	if !result.Floating.AutoDetected {
+		t.Fatalf("expected floating tag auto detection")
+	}
+	if result.Floating.TagName != "v1" {
+		t.Fatalf("expected target floating tag v1 got %s", result.Floating.TagName)
+	}
+	if result.Floating.Existing.Name != "refs/tags/v1" {
+		t.Fatalf("expected existing floating tag to be captured")
+	}
+}
+
+func TestPlanReleaseFloatingDetectionIgnoresMismatchedRefs(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner("v")
+	tags := []Tag{
+		{Name: "refs/tags/v1.2.3", ObjectID: "abc"},
+		{Name: "refs/tags/v1", ObjectID: "def"},
+	}
+
+	result, err := planner.PlanRelease(tags, bump.BumpPatch, "")
+	if err != nil {
+		t.Fatalf(errPlanRelease, err)
+	}
+
+	if result.Floating.AutoDetected {
+		t.Fatalf("did not expect auto detection when commits differ")
+	}
+	if result.Floating.Existing.Name != "refs/tags/v1" {
+		t.Fatalf("expected floating tag reference to be recorded")
+	}
+}
+
+func TestPlanReleaseFloatingTagNameFollowsNextMajor(t *testing.T) {
+	t.Parallel()
+
+	planner := NewPlanner("v")
+	tags := []Tag{{Name: "refs/tags/v1.2.3", ObjectID: "abc"}}
+
+	result, err := planner.PlanRelease(tags, bump.BumpMajor, "")
+	if err != nil {
+		t.Fatalf(errPlanRelease, err)
+	}
+
+	if result.Floating.TagName != "v2" {
+		t.Fatalf("expected floating tag name v2 got %s", result.Floating.TagName)
+	}
+	if result.Floating.Existing.Name != "" {
+		t.Fatalf("did not expect existing floating tag for new major")
+	}
+}
+
 func TestPlanRCRespectsBaseOverride(t *testing.T) {
 	t.Parallel()
 

@@ -60,6 +60,7 @@ func (c *sdkClient) ListRefsWithPrefix(ctx context.Context, prefix string) ([]Re
 	var continuation *string
 	var results []Ref
 
+	peelTags := true
 	for {
 		args := git.GetRefsArgs{
 			Project:      c.project,
@@ -71,6 +72,7 @@ func (c *sdkClient) ListRefsWithPrefix(ctx context.Context, prefix string) ([]Re
 		if continuation != nil {
 			args.ContinuationToken = continuation
 		}
+		args.PeelTags = &peelTags
 
 		resp, err := c.git.GetRefs(ctx, args)
 		if err != nil {
@@ -90,6 +92,35 @@ func (c *sdkClient) ListRefsWithPrefix(ctx context.Context, prefix string) ([]Re
 	}
 
 	return results, nil
+}
+
+// DeleteRef removes a ref when the current object ID matches.
+func (c *sdkClient) DeleteRef(ctx context.Context, name string, objectID string) error {
+	refName := strings.TrimSpace(name)
+	if refName == "" {
+		return errors.New("ado client: ref name is empty")
+	}
+	current := strings.TrimSpace(objectID)
+	if current == "" {
+		return errors.New("ado client: ref object id is empty")
+	}
+	zero := strings.Repeat("0", 40)
+	updates := []git.GitRefUpdate{
+		{
+			Name:        &refName,
+			OldObjectId: &current,
+			NewObjectId: &zero,
+		},
+	}
+	args := git.UpdateRefsArgs{
+		Project:      c.project,
+		RepositoryId: c.repository,
+		RefUpdates:   &updates,
+	}
+	if _, err := c.git.UpdateRefs(ctx, args); err != nil {
+		return fmt.Errorf("deleting ref %s: %w", refName, err)
+	}
+	return nil
 }
 
 // FindPullRequestByMergeCommit returns the PR ID whose merge commit equals commitSHA.
@@ -215,9 +246,14 @@ func convertGitRefs(values []git.GitRef) []Ref {
 	}
 	refs := make([]Ref, 0, len(values))
 	for _, r := range values {
+		name := strings.TrimSpace(derefString(r.Name))
+		objectID := strings.TrimSpace(derefString(r.PeeledObjectId))
+		if objectID == "" {
+			objectID = strings.TrimSpace(derefString(r.ObjectId))
+		}
 		refs = append(refs, Ref{
-			Name:     strings.TrimSpace(derefString(r.Name)),
-			ObjectID: strings.TrimSpace(derefString(r.ObjectId)),
+			Name:     name,
+			ObjectID: objectID,
 		})
 	}
 	return refs
