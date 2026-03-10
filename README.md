@@ -184,21 +184,20 @@ The tests call `go run ./cmd/aav ...` so they verify the built binary end-to-end
 
 ## Contributing
 
-- Go 1.23+ is required; keep Go modules tidy and run `go test ./...` before submitting changes.
+- Go 1.26+ is required. Run `make deps` to install dependencies and Go tools, then `make ci-local` to mirror CI locally.
+- Keep Go modules tidy and run `go test ./...` before submitting changes.
 - Follow the layered architecture: keep business logic separate from Azure SDK calls and CLI plumbing.
 - Add unit tests alongside any new exported behavior. Mock the ADO client for service tests.
-- Use `golangci-lint run --timeout=10m` and `make ci-local` to mirror CI locally.
 - For release engineering, see `RELEASE_GUIDE.md` and `RELEASE_*` Make targets.
 
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE) for details.
 
-- Build date
-- Built by (goreleaser)
-
 ## Configuration Files
 
+- `.tool-versions` - mise versions for golang and pre-commit
+- `tools/tools.go` - Development tool dependencies (golangci-lint, gosec, govulncheck)
 - `.goreleaser.yml` - GoReleaser configuration for builds and releases
 - `.github/workflows/ci.yml` - CI pipeline (tests, linting, security)
 - `.github/workflows/release.yml` - Release pipeline
@@ -213,6 +212,32 @@ Apache License 2.0. See [LICENSE](LICENSE) for details.
 
 ## Development
 
+### Development Tooling
+
+We use **mise** for top-level ecosystems only (golang, pre-commit via `.tool-versions`). Go development tools (golangci-lint, gosec, govulncheck) are installed via the Makefile:
+
+```bash
+mise install          # Install golang and pre-commit from .tool-versions
+make deps             # Download modules, verify, and install Go tools
+```
+
+Tools are tracked in `tools/tools.go` using the [standard Go pattern](https://go.dev/wiki/Modules#how-can-i-track-tool-dependencies-for-a-module): blank imports with `//go:build tools` so they are excluded from the application build. Versions are pinned in `go.mod`; `go install` (without `@version`) uses the module graph and any `replace` directives.
+
+**Module cache issues:** If `go mod verify` fails with "dir has been modified", run `make deps-clean` to clear the cache, then `make deps` again. The `deps` target will also auto-retry after cleaning on verify failure.
+
+#### Size and Security Impact
+
+| Concern | Impact |
+| --- | --- |
+| **Application binary** | None. The tools package is excluded from builds (`//go:build tools`). Your shipped binary does not include golangci-lint, gosec, or govulncheck. |
+| **Runtime attack surface** | None. The tools are separate executables used only in development and CI, not in production. |
+| **go.sum / module cache** | Larger. Tool dependencies are downloaded and checksummed. This affects local dev and CI, not the released artifact. |
+| **govulncheck output** | May report vulnerabilities in tool dependencies. Those affect the tool binaries only, not your application at runtime. |
+
+You are not inheriting the tools' security issues into your code—you are tracking their versions for reproducible development and CI.
+
+### CI Checks
+
 This project includes several CI checks:
 
 - **Tests**: Unit tests with race detection and coverage
@@ -226,19 +251,19 @@ All checks must pass before merging to main.
 ### Project Structure
 
 ```text
-ai-code-template-go/
-├── cmd/                    # Application entry points
-│   └── server/            # HTTP server application
-├── internal/               # Private application code
-│   ├── config/            # Configuration management
-│   ├── handlers/          # HTTP request handlers
-│   └── models/            # Data models
-├── pkg/                    # Public libraries
-├── api/                    # API definitions
-├── docs/                   # Documentation
-├── scripts/                # Build and deployment scripts
-├── examples/               # Usage examples
-└── .env.example           # Environment variables template
+launch-ado-automatic-versioner/
+├── cmd/aav/               # CLI entry point
+├── internal/              # Private application code
+│   ├── ado/               # Azure DevOps client
+│   ├── cli/               # Cobra commands and flags
+│   ├── config/            # Configuration resolution
+│   ├── domain/            # Business logic (branchmap, bump, labels, tagplan)
+│   ├── logging/           # Structured logging
+│   ├── services/          # Service layer (inferbump, prlabel, tagging)
+│   └── version/           # Build metadata
+├── tools/                 # Development tool dependencies (tools.go)
+├── integration/           # Integration tests
+└── scripts/               # Build and setup scripts
 ```
 
 ### Docker Development
