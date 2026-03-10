@@ -1,6 +1,6 @@
 # This makefile provides targets that mirror the CI pipeline and help with development
 
-.PHONY: help test lint security vulnerability-check build clean setup deps verify mod-tidy-check all ci-local
+.PHONY: help test lint security vulnerability-check build clean setup deps deps-clean verify mod-tidy-check all ci-local
 
 # =============================================================================
 # Configuration
@@ -52,6 +52,7 @@ help:
 	@echo "  $(GREEN)Development targets:$(NC)"
 	@echo "    setup              - Install required tools and dependencies via mise"
 	@echo "    deps               - Download and verify Go dependencies, install Go tools"
+	@echo "    deps-clean         - Clear Go module cache (use when verify fails with 'dir has been modified')"
 	@echo "    clean              - Remove build artifacts"
 	@echo ""
 	@echo "  $(GREEN)Tool management targets:$(NC)"
@@ -135,16 +136,22 @@ check-go-version:
 	fi
 	$(call print_success,Go version check passed!)
 
+## deps-clean: Clear Go module cache (fixes 'dir has been modified' verify errors)
+deps-clean:
+	$(call print_info,Clearing Go module cache...)
+	go clean -modcache
+	$(call print_success,Module cache cleared. Run 'make deps' to re-download.)
+
 ## deps: Download and verify dependencies, install Go tools
 deps:
 	$(call print_info,Downloading dependencies...)
 	go mod download
 	$(call print_info,Verifying dependencies...)
-	go mod verify
+	@go mod verify || (echo "$(YELLOW)Module cache corrupted, cleaning and retrying...$(NC)" && go clean -modcache && go mod download && go mod verify)
 	$(call print_info,Installing Go tools...)
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
-	go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION)
-	go install golang.org/x/vuln/cmd/govulncheck@v$(GOVULNCHECK_VERSION)
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+	go install github.com/securego/gosec/v2/cmd/gosec
+	go install golang.org/x/vuln/cmd/govulncheck
 	$(call print_success,Dependencies ready!)
 
 ## verify: Verify the module and dependencies
