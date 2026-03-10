@@ -17,7 +17,7 @@ repos:
       - id: requirements-txt-fixer
 
   - repo: https://github.com/golangci/golangci-lint
-    rev: v2.7.2
+    rev: v2.11.2
     hooks:
       - id: golangci-lint
 
