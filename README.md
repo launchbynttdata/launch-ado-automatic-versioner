@@ -184,7 +184,7 @@ The tests call `go run ./cmd/aav ...` so they verify the built binary end-to-end
 
 ## Contributing
 
-- Go 1.26+ is required. Run `make deps` to install dependencies and Go tools, then `make ci-local` to mirror CI locally.
+- Go 1.25+ is required. Run `make deps` to install dependencies and Go tools, then `make ci-local` to mirror CI locally.
 - Keep Go modules tidy and run `go test ./...` before submitting changes.
 - Follow the layered architecture: keep business logic separate from Azure SDK calls and CLI plumbing.
 - Add unit tests alongside any new exported behavior. Mock the ADO client for service tests.

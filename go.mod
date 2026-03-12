@@ -1,6 +1,6 @@
 module github.com/launchbynttdata/launch-ado-automatic-versioner
 
-go 1.26.1
+go 1.25.0
 
 require (
 	github.com/blang/semver/v4 v4.0.0
@@ -246,5 +246,3 @@ require (
 	mvdan.cc/gofumpt v0.9.2 // indirect
 	mvdan.cc/unparam v0.0.0-20251027182757-5beb8c8f8f15 // indirect
 )
-
-replace golang.org/x/tools => golang.org/x/tools v0.42.0
