@@ -151,7 +151,7 @@ deps:
 	$(call print_info,Installing Go tools...)
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	go install github.com/securego/gosec/v2/cmd/gosec
-	go install golang.org/x/vuln/cmd/govulncheck
+	go install golang.org/x/vuln/cmd/govulncheck@latest
 	$(call print_success,Dependencies ready!)
 
 ## verify: Verify the module and dependencies

@@ -11,7 +11,7 @@
 
 ## Code Style
 
-* Go version 1.23+ with the latest patch release.
+* Go version 1.25.8+ (required for security patches in standard library).
 * Avoid complex embedded logic in a single function. Break complex functions down into smaller functions.
 * Use strong typing wherever possible.
 * Don't use the `interface{}` construct. Use `any` instead.
