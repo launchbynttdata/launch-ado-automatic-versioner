@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/ado"
+	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/ado/adotest"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/domain/bump"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/domain/tagplan"
 )
@@ -22,9 +22,9 @@ const (
 func TestPlanReleaseFromExistingTags(t *testing.T) {
 	t.Parallel()
 
-	client := &fakeRefClient{
-		refs: []ado.Ref{{Name: sampleReleaseTag, ObjectID: sampleReleaseObjectID}, {Name: sampleRCtag, ObjectID: sampleRCObjectID}},
-	}
+	client := adotest.NewClient()
+	client.SeedAnnotatedTag(sampleReleaseTag, "release-tag-object", sampleReleaseObjectID)
+	client.SeedAnnotatedTag(sampleRCtag, "rc-tag-object", sampleRCObjectID)
 
 	svc := NewService(client, tagplan.NewPlanner("v"))
 
@@ -33,8 +33,8 @@ func TestPlanReleaseFromExistingTags(t *testing.T) {
 		t.Fatalf("plan release: %v", err)
 	}
 
-	if client.lastPrefix != tagRefPrefix {
-		t.Fatalf("expected prefix %s got %s", tagRefPrefix, client.lastPrefix)
+	if client.LastPrefix != tagRefPrefix {
+		t.Fatalf("expected prefix %s got %s", tagRefPrefix, client.LastPrefix)
 	}
 
 	if result.TagName != "v1.2.4" {
@@ -45,9 +45,9 @@ func TestPlanReleaseFromExistingTags(t *testing.T) {
 func TestPlanRCUsesPlanner(t *testing.T) {
 	t.Parallel()
 
-	client := &fakeRefClient{
-		refs: []ado.Ref{{Name: "refs/tags/v1.2.3", ObjectID: sampleReleaseObjectID}, {Name: "refs/tags/v1.3.0-rc.1", ObjectID: sampleRCObjectID}},
-	}
+	client := adotest.NewClient()
+	client.SeedAnnotatedTag("v1.2.3", "release-tag-object", sampleReleaseObjectID)
+	client.SeedAnnotatedTag("v1.3.0-rc.1", "rc-tag-object", sampleRCObjectID)
 
 	svc := NewService(client, tagplan.NewPlanner("v"))
 
@@ -64,9 +64,8 @@ func TestPlanRCUsesPlanner(t *testing.T) {
 func TestPlanAndCreateCreatesTag(t *testing.T) {
 	t.Parallel()
 
-	client := &fakeRefClient{
-		refs: []ado.Ref{{Name: sampleReleaseTag, ObjectID: sampleReleaseObjectID}},
-	}
+	client := adotest.NewClient()
+	client.SeedAnnotatedTag(sampleReleaseTag, "release-tag-object", sampleReleaseObjectID)
 
 	svc := NewService(client, tagplan.NewPlanner("v"))
 
@@ -87,10 +86,10 @@ func TestPlanAndCreateCreatesTag(t *testing.T) {
 		t.Fatalf("expected tag name v1.3.0 got %s", result.TagName)
 	}
 
-	if len(client.createdTags) != 1 {
-		t.Fatalf("expected exactly one tag creation got %d", len(client.createdTags))
+	if len(client.CreatedTags) != 1 {
+		t.Fatalf("expected exactly one tag creation got %d", len(client.CreatedTags))
 	}
-	releaseTag := client.createdTags[0]
+	releaseTag := client.CreatedTags[0]
 	if releaseTag.Name != result.TagName {
 		t.Fatalf("expected created tag name %s got %s", result.TagName, releaseTag.Name)
 	}
@@ -103,14 +102,24 @@ func TestPlanAndCreateCreatesTag(t *testing.T) {
 	if releaseTag.TaggerName != taggerNameDefault || releaseTag.TaggerEmail != taggerEmailDefault {
 		t.Fatalf("unexpected tagger info %#v", releaseTag)
 	}
+
+	ref, ok := client.Ref(result.TagName)
+	if !ok {
+		t.Fatalf("expected release ref %s to exist", result.TagName)
+	}
+	if ref.ObjectID == "deadbeef" {
+		t.Fatalf("expected annotated tag ref object id to differ from peeled commit")
+	}
+	if ref.PeeledObjectID != "deadbeef" {
+		t.Fatalf("expected release ref to peel to deadbeef got %s", ref.PeeledObjectID)
+	}
 }
 
 func TestPlanAndCreateCreatesFloatingTagWhenEnabled(t *testing.T) {
 	t.Parallel()
 
-	client := &fakeRefClient{
-		refs: []ado.Ref{{Name: sampleReleaseTag, ObjectID: sampleReleaseObjectID}},
-	}
+	client := adotest.NewClient()
+	client.SeedAnnotatedTag(sampleReleaseTag, "release-tag-object", sampleReleaseObjectID)
 
 	svc := NewService(client, tagplan.NewPlanner("v"))
 
@@ -127,26 +136,31 @@ func TestPlanAndCreateCreatesFloatingTagWhenEnabled(t *testing.T) {
 		t.Fatalf("plan and create: %v", err)
 	}
 
-	if len(client.createdTags) != 2 {
-		t.Fatalf("expected release and floating tag creations got %d", len(client.createdTags))
+	if len(client.CreatedTags) != 2 {
+		t.Fatalf("expected release and floating tag creations got %d", len(client.CreatedTags))
 	}
-	if client.createdTags[1].Name != "v1" {
-		t.Fatalf("expected floating tag v1 got %s", client.createdTags[1].Name)
+	if client.CreatedTags[1].Name != "v1" {
+		t.Fatalf("expected floating tag v1 got %s", client.CreatedTags[1].Name)
 	}
 	if !result.Floating.Enabled || !result.Floating.Created {
 		t.Fatalf("expected floating tag metadata to signal creation: %+v", result.Floating)
+	}
+
+	ref, ok := client.Ref("v1")
+	if !ok {
+		t.Fatalf("expected floating ref v1 to exist")
+	}
+	if ref.PeeledObjectID != "deadbeef" {
+		t.Fatalf("expected floating ref to peel to deadbeef got %s", ref.PeeledObjectID)
 	}
 }
 
 func TestPlanAndCreateAutoDetectsFloatingTag(t *testing.T) {
 	t.Parallel()
 
-	client := &fakeRefClient{
-		refs: []ado.Ref{
-			{Name: sampleReleaseTag, ObjectID: sampleReleaseObjectID},
-			{Name: "refs/tags/v1", ObjectID: sampleReleaseObjectID},
-		},
-	}
+	client := adotest.NewClient()
+	client.SeedAnnotatedTag(sampleReleaseTag, "release-tag-object", sampleReleaseObjectID)
+	client.SeedAnnotatedTag("v1", "floating-tag-object", sampleReleaseObjectID)
 
 	svc := NewService(client, tagplan.NewPlanner("v"))
 
@@ -169,15 +183,30 @@ func TestPlanAndCreateAutoDetectsFloatingTag(t *testing.T) {
 	if !result.Floating.Enabled || !result.Floating.Created {
 		t.Fatalf("expected floating tag to be updated")
 	}
-	if len(client.deletedRefs) != 1 {
+	if len(client.DeletedRefs) != 1 {
 		t.Fatalf("expected floating tag deletion before recreation")
+	}
+	if client.DeletedRefs[0].OldObjectID != "floating-tag-object" {
+		t.Fatalf("expected delete to use ref object id, got %s", client.DeletedRefs[0].OldObjectID)
+	}
+
+	ref, ok := client.Ref("v1")
+	if !ok {
+		t.Fatalf("expected floating ref v1 to exist after update")
+	}
+	if ref.ObjectID == "floating-tag-object" {
+		t.Fatalf("expected floating ref to be recreated with a new tag object id")
+	}
+	if ref.PeeledObjectID != "deadbeef" {
+		t.Fatalf("expected floating ref to peel to deadbeef got %s", ref.PeeledObjectID)
 	}
 }
 
 func TestPlanAndCreateValidations(t *testing.T) {
 	t.Parallel()
 
-	client := &fakeRefClient{refs: []ado.Ref{{Name: "refs/tags/v0.0.0", ObjectID: sampleReleaseObjectID}}}
+	client := adotest.NewClient()
+	client.SeedAnnotatedTag("v0.0.0", "release-tag-object", sampleReleaseObjectID)
 	svc := NewService(client, tagplan.NewPlanner("v"))
 
 	baseCfg := CreateConfig{Config: Config{Mode: tagplan.ModeRelease}, TaggerName: taggerNameDefault, TaggerEmail: taggerEmailDefault}
@@ -194,7 +223,7 @@ func TestPlanAndCreateValidations(t *testing.T) {
 		t.Fatalf("expected ErrEmptyEmail got %v", err)
 	}
 
-	client.createErr = errors.New("boom")
+	client.CreateErr = errors.New("boom")
 	_, err := svc.PlanAndCreate(context.Background(), CreateConfig{
 		Config:      Config{Mode: tagplan.ModeRelease},
 		CommitSHA:   "abc",
@@ -214,63 +243,14 @@ func TestPlanValidations(t *testing.T) {
 		t.Fatalf("expected ErrNilClient got %v", err)
 	}
 
-	client := &fakeRefClient{}
+	client := adotest.NewClient()
 	svc = NewService(client, tagplan.NewPlanner("v"))
 	if _, err := svc.Plan(context.Background(), Config{Mode: "bad"}); !errors.Is(err, ErrInvalidMode) {
 		t.Fatalf("expected ErrInvalidMode got %v", err)
 	}
 
-	client.err = errors.New("boom")
+	client.ListErr = errors.New("boom")
 	if _, err := svc.Plan(context.Background(), Config{Mode: tagplan.ModeRelease}); err == nil {
 		t.Fatalf("expected error for client failure")
 	}
-}
-
-type fakeRefClient struct {
-	refs        []ado.Ref
-	err         error
-	lastPrefix  string
-	createdTags []ado.TagSpec
-	createErr   error
-	deletedRefs []deleteCall
-	deleteErr   error
-}
-
-type deleteCall struct {
-	name     string
-	objectID string
-}
-
-func (f *fakeRefClient) ListRefsWithPrefix(_ context.Context, prefix string) ([]ado.Ref, error) {
-	f.lastPrefix = prefix
-	return f.refs, f.err
-}
-
-func (f *fakeRefClient) ListPRLabels(context.Context, int) ([]string, error) {
-	return nil, nil
-}
-
-func (f *fakeRefClient) AddPRLabel(context.Context, int, string) error {
-	return nil
-}
-
-func (f *fakeRefClient) FindPullRequestByMergeCommit(context.Context, string) (int, error) {
-	return 0, ado.ErrPullRequestNotFound
-}
-
-func (f *fakeRefClient) CreateAnnotatedTag(_ context.Context, spec ado.TagSpec) error {
-	if f.createErr != nil {
-		return f.createErr
-	}
-	copy := spec
-	f.createdTags = append(f.createdTags, copy)
-	return nil
-}
-
-func (f *fakeRefClient) DeleteRef(_ context.Context, name, objectID string) error {
-	if f.deleteErr != nil {
-		return f.deleteErr
-	}
-	f.deletedRefs = append(f.deletedRefs, deleteCall{name: name, objectID: objectID})
-	return nil
 }

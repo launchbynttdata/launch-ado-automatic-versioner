@@ -247,13 +247,12 @@ func convertGitRefs(values []git.GitRef) []Ref {
 	refs := make([]Ref, 0, len(values))
 	for _, r := range values {
 		name := strings.TrimSpace(derefString(r.Name))
-		objectID := strings.TrimSpace(derefString(r.PeeledObjectId))
-		if objectID == "" {
-			objectID = strings.TrimSpace(derefString(r.ObjectId))
-		}
+		objectID := strings.TrimSpace(derefString(r.ObjectId))
+		peeledObjectID := strings.TrimSpace(derefString(r.PeeledObjectId))
 		refs = append(refs, Ref{
-			Name:     name,
-			ObjectID: objectID,
+			Name:           name,
+			ObjectID:       objectID,
+			PeeledObjectID: peeledObjectID,
 		})
 	}
 	return refs

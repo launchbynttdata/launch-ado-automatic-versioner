@@ -35,8 +35,9 @@ const (
 
 // Tag represents a Git tag reference.
 type Tag struct {
-	Name     string
-	ObjectID string
+	Name        string
+	ObjectID    string
+	RefObjectID string
 }
 
 // FloatingPlan captures detection and execution details for floating tags.
