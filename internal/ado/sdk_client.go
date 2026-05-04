@@ -117,8 +117,21 @@ func (c *sdkClient) DeleteRef(ctx context.Context, name string, objectID string)
 		RepositoryId: c.repository,
 		RefUpdates:   &updates,
 	}
-	if _, err := c.git.UpdateRefs(ctx, args); err != nil {
+	results, err := c.git.UpdateRefs(ctx, args)
+	if err != nil {
 		return fmt.Errorf("deleting ref %s: %w", refName, err)
+	}
+	if err := errIfRefDeleteUpdateRejected(results, refName); err != nil {
+		return err
+	}
+	return nil
+}
+
+// errIfRefDeleteUpdateRejected returns an error when Azure DevOps rejected the
+// ref update in the response body (transport succeeded but Success is false).
+func errIfRefDeleteUpdateRejected(results *[]git.GitRefUpdateResult, refName string) error {
+	if results == nil || len(*results) != 1 || !derefBool((*results)[0].Success) {
+		return fmt.Errorf("deleting ref %s rejected", refName)
 	}
 	return nil
 }
@@ -247,13 +260,12 @@ func convertGitRefs(values []git.GitRef) []Ref {
 	refs := make([]Ref, 0, len(values))
 	for _, r := range values {
 		name := strings.TrimSpace(derefString(r.Name))
-		objectID := strings.TrimSpace(derefString(r.PeeledObjectId))
-		if objectID == "" {
-			objectID = strings.TrimSpace(derefString(r.ObjectId))
-		}
+		objectID := strings.TrimSpace(derefString(r.ObjectId))
+		peeledObjectID := strings.TrimSpace(derefString(r.PeeledObjectId))
 		refs = append(refs, Ref{
-			Name:     name,
-			ObjectID: objectID,
+			Name:           name,
+			ObjectID:       objectID,
+			PeeledObjectID: peeledObjectID,
 		})
 	}
 	return refs
@@ -319,6 +331,13 @@ func labelNames(defs *[]core.WebApiTagDefinition) []string {
 func derefString(value *string) string {
 	if value == nil {
 		return ""
+	}
+	return *value
+}
+
+func derefBool(value *bool) bool {
+	if value == nil {
+		return false
 	}
 	return *value
 }

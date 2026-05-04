@@ -10,8 +10,9 @@ var ErrPullRequestNotFound = errors.New("ado: pull request not found")
 
 // Ref represents a Git ref returned by Azure DevOps.
 type Ref struct {
-	Name     string
-	ObjectID string
+	Name           string
+	ObjectID       string
+	PeeledObjectID string
 }
 
 // TagObjectType enumerates the Git object kinds supported when creating annotated tags.
