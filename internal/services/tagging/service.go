@@ -123,9 +123,20 @@ func toPlannerTags(refs []ado.Ref) []tagplan.Tag {
 
 	tags := make([]tagplan.Tag, 0, len(refs))
 	for _, ref := range refs {
-		tags = append(tags, tagplan.Tag{Name: ref.Name, ObjectID: ref.ObjectID})
+		tags = append(tags, tagplan.Tag{
+			Name:        ref.Name,
+			ObjectID:    refTargetObjectID(ref),
+			RefObjectID: ref.ObjectID,
+		})
 	}
 	return tags
+}
+
+func refTargetObjectID(ref ado.Ref) string {
+	if target := strings.TrimSpace(ref.PeeledObjectID); target != "" {
+		return target
+	}
+	return strings.TrimSpace(ref.ObjectID)
 }
 
 func (s Service) applyFloatingTag(ctx context.Context, cfg CreateConfig, plan *tagplan.Result, releaseSpec ado.TagSpec) error {
@@ -150,7 +161,10 @@ func (s Service) applyFloatingTag(ctx context.Context, cfg CreateConfig, plan *t
 	spec.Name = floatingName
 
 	if existingName := strings.TrimSpace(plan.Floating.Existing.Name); existingName != "" {
-		objectID := strings.TrimSpace(plan.Floating.Existing.ObjectID)
+		objectID := strings.TrimSpace(plan.Floating.Existing.RefObjectID)
+		if objectID == "" {
+			objectID = strings.TrimSpace(plan.Floating.Existing.ObjectID)
+		}
 		if objectID == "" {
 			return fmt.Errorf("floating tag %s missing object id", existingName)
 		}

@@ -116,7 +116,7 @@ stages:
 | Tagger name | `AAV_TAGGER_NAME` | `--tagger-name` | `aav` | Recorded in annotated tag |
 | Tagger email | `AAV_TAGGER_EMAIL` | `--tagger-email` | `aav@example.com` | Recorded in annotated tag |
 | Tag prefix | `AAV_TAG_PREFIX` | `--tag-prefix` | empty | Prepended to computed tag names (set to `v` for legacy repos) |
-| Floating tags | `AAV_USE_FLOATING_TAGS` | `--use-floating-tags` | `false` | Maintain short `v<major>` refs that track the latest release major; auto-enabled when such refs already exist |
+| Floating tags | `AAV_USE_FLOATING_TAGS` | `--use-floating-tags` | `false` | Maintain short `v<major>` refs that track the latest release major; detected automatically when such refs already exist |
 
 > **Precedence**: environment variables always win over explicit flags; conflicts are logged in both terse and verbose modes.
 
@@ -135,9 +135,9 @@ stages:
 
 `aav create-tag --tag-mode release` can also maintain **floating** `v<major>` refs that always point at the most recent patch of the newest release line:
 
-- Opt in via `--use-floating-tags` / `AAV_USE_FLOATING_TAGS`, or let the tool auto-enable the behavior when it detects an existing floating tag that already tracks a valid SemVer release.
+- Opt in via `--use-floating-tags` / `AAV_USE_FLOATING_TAGS`, or let the tool detect an existing floating tag that already tracks a valid SemVer release.
 - Floating refs are only created or updated in **release** mode, and only for the highest major version (e.g., when `2.x` is current, only `v2` moves; creating `3.0.0` also creates `v3`).
-- Updates are performed by deleting the previous ref (when present) and recreating it as an annotated tag using the **exact same metadata** (tagger, message, commit) as the freshly minted SemVer tag.
+- Updates are performed by deleting the previous ref (when present) and recreating it as an annotated tag using the **exact same metadata** (tagger, message, commit) as the freshly minted SemVer tag. This movement is automatic for virtual floating refs; SemVer release and RC tags are never moved.
 - Detection requires that the floating ref’s commit matches a non-RC SemVer tag so repositories that already use floating tags automatically stay on rails even if the flag is not set explicitly. The CLI logs when auto-detection overrides the flag state.
 
 ### Build Metadata & `aav version`
