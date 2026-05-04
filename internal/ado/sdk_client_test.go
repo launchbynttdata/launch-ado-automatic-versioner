@@ -43,3 +43,76 @@ func TestConvertGitRefs(t *testing.T) {
 		}
 	})
 }
+
+func TestErrIfRefDeleteUpdateRejected(t *testing.T) {
+	t.Parallel()
+	const ref = "refs/tags/floating"
+
+	boolPtr := func(b bool) *bool { return &b }
+
+	tests := []struct {
+		name    string
+		results *[]git.GitRefUpdateResult
+		wantErr bool
+	}{
+		{
+			name:    "nil results",
+			results: nil,
+			wantErr: true,
+		},
+		{
+			name:    "empty slice",
+			results: &[]git.GitRefUpdateResult{},
+			wantErr: true,
+		},
+		{
+			name: "two results",
+			results: &[]git.GitRefUpdateResult{
+				{Success: boolPtr(true)},
+				{Success: boolPtr(true)},
+			},
+			wantErr: true,
+		},
+		{
+			name: "success false stale old object id",
+			results: &[]git.GitRefUpdateResult{
+				{Success: boolPtr(false)},
+			},
+			wantErr: true,
+		},
+		{
+			name: "success nil",
+			results: &[]git.GitRefUpdateResult{
+				{Success: nil},
+			},
+			wantErr: true,
+		},
+		{
+			name: "single success true",
+			results: &[]git.GitRefUpdateResult{
+				{Success: boolPtr(true)},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := errIfRefDeleteUpdateRejected(tt.results, ref)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				const wantSub = "deleting ref refs/tags/floating rejected"
+				if err.Error() != wantSub {
+					t.Fatalf("error %q, want %q", err.Error(), wantSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}

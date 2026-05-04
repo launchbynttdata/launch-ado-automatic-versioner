@@ -121,6 +121,15 @@ func (c *sdkClient) DeleteRef(ctx context.Context, name string, objectID string)
 	if err != nil {
 		return fmt.Errorf("deleting ref %s: %w", refName, err)
 	}
+	if err := errIfRefDeleteUpdateRejected(results, refName); err != nil {
+		return err
+	}
+	return nil
+}
+
+// errIfRefDeleteUpdateRejected returns an error when Azure DevOps rejected the
+// ref update in the response body (transport succeeded but Success is false).
+func errIfRefDeleteUpdateRejected(results *[]git.GitRefUpdateResult, refName string) error {
 	if results == nil || len(*results) != 1 || !derefBool((*results)[0].Success) {
 		return fmt.Errorf("deleting ref %s rejected", refName)
 	}
