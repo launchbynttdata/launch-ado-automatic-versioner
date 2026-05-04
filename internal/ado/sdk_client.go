@@ -117,8 +117,12 @@ func (c *sdkClient) DeleteRef(ctx context.Context, name string, objectID string)
 		RepositoryId: c.repository,
 		RefUpdates:   &updates,
 	}
-	if _, err := c.git.UpdateRefs(ctx, args); err != nil {
+	results, err := c.git.UpdateRefs(ctx, args)
+	if err != nil {
 		return fmt.Errorf("deleting ref %s: %w", refName, err)
+	}
+	if results == nil || len(*results) != 1 || !derefBool((*results)[0].Success) {
+		return fmt.Errorf("deleting ref %s rejected", refName)
 	}
 	return nil
 }
@@ -318,6 +322,13 @@ func labelNames(defs *[]core.WebApiTagDefinition) []string {
 func derefString(value *string) string {
 	if value == nil {
 		return ""
+	}
+	return *value
+}
+
+func derefBool(value *bool) bool {
+	if value == nil {
+		return false
 	}
 	return *value
 }
