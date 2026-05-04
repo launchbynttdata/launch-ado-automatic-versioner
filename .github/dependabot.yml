@@ -6,6 +6,15 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      go-modules:
+        applies-to: version-updates
+        patterns:
+          - "*"
+      go-modules-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
   # Enable version updates for GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
