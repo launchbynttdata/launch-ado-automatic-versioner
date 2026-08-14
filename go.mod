@@ -5,6 +5,7 @@ go 1.26.5
 require (
 	github.com/blang/semver/v4 v4.0.0
 	github.com/golangci/golangci-lint/v2 v2.12.2
+	github.com/leodido/go-conventionalcommits v0.13.0
 	github.com/microsoft/azure-devops-go-api/azuredevops/v7 v7.1.0
 	github.com/securego/gosec/v2 v2.28.0
 	github.com/spf13/cobra v1.10.2
