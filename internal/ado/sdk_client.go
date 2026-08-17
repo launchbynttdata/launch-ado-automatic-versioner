@@ -186,6 +186,12 @@ func (c *sdkClient) GetPullRequestTitle(ctx context.Context, prID int) (string, 
 	if err != nil {
 		return "", fmt.Errorf("getting pull request: %w", err)
 	}
+
+	return pullRequestTitleFromGitPR(pr)
+}
+
+// pullRequestTitleFromGitPR extracts and validates a non-empty title from a Git pull request.
+func pullRequestTitleFromGitPR(pr *git.GitPullRequest) (string, error) {
 	if pr == nil || pr.Title == nil {
 		return "", errors.New("ado client: pull request title is empty")
 	}

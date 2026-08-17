@@ -150,21 +150,27 @@ stages:
 
 When `--use-pr-title` is enabled, `pr-label` fetches the PR title from ADO and parses it as a [Conventional Commit](https://www.conventionalcommits.org/) header. Scoped titles are supported (e.g. `chore(ci): update pipelines`, `feat(enhancement): add capability`).
 
+Only the **PR title** is inspected — not the PR description/body. In practice, mark breaking changes with `!` in the title (`feat!: …` or `fix(api)!: …`). A multiline title that embeds a `BREAKING CHANGE:` footer is also recognized, but Azure DevOps titles are typically single-line, so the `!` marker is the reliable ADO pattern.
+
 | Condition | Bump |
 | --- | --- |
-| Breaking change (`!` or `BREAKING CHANGE`) | `major` |
+| Breaking change (`!` in the title header, or `BREAKING CHANGE` footer in the title text) | `major` |
 | `feat` | `minor` |
 | `perf` | `minor` |
 | `fix` | `patch` |
 | Other conventional types (`chore`, `docs`, `refactor`, `ci`, `test`, `build`, `style`, `revert`) | `patch` |
 
-When `--allow-branch-name-fallback` is set and the title is invalid, bump intent falls back to branch prefixes. The CLI emits a loud warning and writes an Azure Pipelines warning line to stdout:
+Types outside that allowlist (for example `infra:` or `deps:`) are **rejected** with exit code `3` when fallback is disabled — they do not default to patch.
+
+When `--allow-branch-name-fallback` is set and the title is invalid, bump intent falls back to branch prefixes. The CLI emits a loud Zap warning (including the invalid title) and writes this exact Azure Pipelines warning line to stdout:
 
 ```text
 ##vso[task.logissue type=warning;]Semver calculation fallback to branch name
 ```
 
 ### Exit codes
+
+Structured exit codes currently apply to **`pr-label`**. Other subcommands still exit `1` for most failures.
 
 | Code | Meaning |
 | --- | --- |

@@ -253,9 +253,9 @@ Rules:
 
 1. Determine bump category (`major|minor|patch`):
    - **Default:** branch prefix mapping from `AAV_SOURCE_BRANCH`.
-   - **PR title mode (`--use-pr-title`):** fetch PR title from ADO and parse as Conventional Commit v1.0 (via `github.com/leodido/go-conventionalcommits`). Scoped titles supported (`type(scope): description`). Bump mapping: breaking → major; `feat`/`perf` → minor; `fix` and other conventional types → patch.
-   - **Fallback (`--allow-branch-name-fallback` with `--use-pr-title`):** when the title is invalid, use branch mapping instead. Emit loud warning logs and Azure Pipelines `##vso[task.logissue type=warning;]Semver calculation fallback to branch name` on stdout. Exit `0`.
-   - **Invalid title without fallback:** exit `3` (semantic validation).
+   - **PR title mode (`--use-pr-title`):** fetch PR title from ADO and parse as Conventional Commit v1.0 (via `github.com/leodido/go-conventionalcommits`). Only the PR **title** is used (not description/body). Scoped titles supported (`type(scope): description`). Bump mapping: breaking (`!` in header, or `BREAKING CHANGE` footer if present in the title text) → major; `feat`/`perf` → minor; `fix` and other enumerated conventional types → patch. Types outside the allowlist (e.g. `infra:`) are rejected. Prefer `!` for breaking changes in ADO, since titles are typically single-line.
+   - **Fallback (`--allow-branch-name-fallback` with `--use-pr-title`):** when the title is invalid, use branch mapping instead. Emit loud warning logs and Azure Pipelines `##vso[task.logissue type=warning;]Semver calculation fallback to branch name` on stdout. Exit `0`. `--allow-branch-name-fallback` without `--use-pr-title` is a configuration error.
+   - **Invalid title without fallback:** exit `3` (semantic validation). Structured exit codes (`2`/`3`) currently apply to `pr-label`; other subcommands typically exit `1`.
 2. Resolve expected label name (using prefix/overrides).
 3. Fetch labels on the PR via ADO `Pull Request Labels - List`.  [oai_citation:4‡Microsoft Learn](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-labels/list?view=azure-devops-rest-7.1&utm_source=chatgpt.com)
 4. Identify existing “semver labels” (labels that equal any of: configured major/minor/patch labels, case-insensitive).

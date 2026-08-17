@@ -17,6 +17,8 @@ var (
 	ErrNilClient   = errors.New("prlabel service: nil ado client")
 	ErrInvalidPR   = errors.New("prlabel service: invalid pr id")
 	ErrEmptyBranch = errors.New("prlabel service: empty branch")
+	// ErrADOAPI indicates an Azure DevOps API failure during labeling.
+	ErrADOAPI = errors.New("prlabel service: ado api error")
 )
 
 // BumpSource describes how bump intent was derived.
@@ -95,7 +97,7 @@ func (s Service) Apply(ctx context.Context, cfg Config) (Result, error) {
 
 	existing, err := s.client.ListPRLabels(ctx, cfg.PRID)
 	if err != nil {
-		return result, fmt.Errorf("listing pr labels: %w", err)
+		return result, fmt.Errorf("%w: listing pr labels: %w", ErrADOAPI, err)
 	}
 
 	decision := s.labels.Decide(existing, bumpIntent)
@@ -107,7 +109,7 @@ func (s Service) Apply(ctx context.Context, cfg Config) (Result, error) {
 
 	if decision.Decision == labels.DecisionAddExpected {
 		if err := s.client.AddPRLabel(ctx, cfg.PRID, decision.ExpectedLabel); err != nil {
-			return result, fmt.Errorf("adding pr label: %w", err)
+			return result, fmt.Errorf("%w: adding pr label: %w", ErrADOAPI, err)
 		}
 		result.LabelAdded = true
 	}
@@ -122,7 +124,7 @@ func (s Service) resolveBumpIntent(ctx context.Context, cfg Config, branch strin
 
 	title, err := s.client.GetPullRequestTitle(ctx, cfg.PRID)
 	if err != nil {
-		return bump.BumpPatch, Result{}, fmt.Errorf("getting pull request title: %w", err)
+		return bump.BumpPatch, Result{}, fmt.Errorf("%w: getting pull request title: %w", ErrADOAPI, err)
 	}
 
 	bumpIntent, parsed, err := s.prtitles.Resolve(title)
@@ -136,28 +138,26 @@ func (s Service) resolveBumpIntent(ctx context.Context, cfg Config, branch strin
 		}, nil
 	}
 
+	trimmedTitle := strings.TrimSpace(title)
 	if !cfg.AllowBranchNameFallback {
 		return bump.BumpPatch, Result{
 			BumpSource:     BumpSourcePRTitle,
-			PRTitle:        strings.TrimSpace(title),
+			PRTitle:        trimmedTitle,
 			FallbackReason: err.Error(),
-		}, fmt.Errorf("%w: %v", prtitle.ErrInvalidConventionalCommit, err)
+		}, err
 	}
 
-	bumpIntent, branchResult, branchErr := s.resolveFromBranch(branch)
-	if branchErr != nil {
-		return bump.BumpPatch, Result{
-			BumpSource:     BumpSourceBranchFallback,
-			PRTitle:        strings.TrimSpace(title),
-			FallbackReason: err.Error(),
-		}, branchErr
-	}
-
-	branchResult.BumpSource = BumpSourceBranchFallback
-	branchResult.FallbackUsed = true
-	branchResult.FallbackReason = err.Error()
-	branchResult.PRTitle = strings.TrimSpace(title)
-	return bumpIntent, branchResult, nil
+	// Apply already requires a non-empty branch when fallback is enabled.
+	bumpIntent, matchedPrefix, matched := s.branches.Resolve(branch)
+	return bumpIntent, Result{
+		Bump:           bumpIntent,
+		BumpSource:     BumpSourceBranchFallback,
+		FallbackUsed:   true,
+		FallbackReason: err.Error(),
+		BranchMatched:  matched,
+		MatchedPrefix:  matchedPrefix,
+		PRTitle:        trimmedTitle,
+	}, nil
 }
 
 func (s Service) resolveFromBranch(branch string) (bump.Bump, Result, error) {

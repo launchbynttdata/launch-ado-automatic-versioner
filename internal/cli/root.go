@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -202,12 +203,12 @@ func newPRLabelCommand(rootFlags *rootFlagSet) *cobra.Command {
 				return err
 			}
 
-			allowBranchFallback := false
-			if allowBranchFallbackFlag != nil {
-				allowBranchFallback, err = allowBranchFallbackFlag.Value(runtime.resolver)
-				if err != nil {
-					return err
-				}
+			allowBranchFallback, err := allowBranchFallbackFlag.Value(runtime.resolver)
+			if err != nil {
+				return err
+			}
+			if allowBranchFallback && !usePRTitle {
+				return exitcodes.WrapConfig(fmt.Errorf("--allow-branch-name-fallback requires --use-pr-title"))
 			}
 
 			branch := branchFlag.Value(runtime.resolver)
@@ -226,7 +227,14 @@ func newPRLabelCommand(rootFlags *rootFlagSet) *cobra.Command {
 				AllowBranchNameFallback: allowBranchFallback,
 			})
 			if err != nil {
-				return mapPRLabelError(err)
+				if result.PRTitle != "" && errors.Is(err, prtitle.ErrInvalidConventionalCommit) {
+					runtime.logger.Error("invalid conventional commit PR title",
+						zap.Int("pr", prID),
+						zap.String("prTitle", result.PRTitle),
+						zap.Error(err),
+					)
+				}
+				return mapPRLabelError(err, result)
 			}
 
 			log := runtime.logger.With(
@@ -251,10 +259,6 @@ func newPRLabelCommand(rootFlags *rootFlagSet) *cobra.Command {
 			}
 
 			if result.FallbackUsed {
-				warning := pipeline.FallbackWarningMessage
-				if result.PRTitle != "" {
-					warning = fmt.Sprintf("%s: PR title %q is not a conventional commit", pipeline.FallbackWarningMessage, result.PRTitle)
-				}
 				log.Warn("semver bump fell back to branch name",
 					zap.String("prTitle", result.PRTitle),
 					zap.String("branch", branch),
@@ -263,7 +267,7 @@ func newPRLabelCommand(rootFlags *rootFlagSet) *cobra.Command {
 					zap.String("matchedPrefix", result.MatchedPrefix),
 					zap.Bool("branchMatched", result.BranchMatched),
 				)
-				if err := pipeline.EmitLogIssueWarning(cmd.OutOrStdout(), warning); err != nil {
+				if err := emitPRLabelFallbackWarning(cmd.OutOrStdout()); err != nil {
 					return err
 				}
 			}
@@ -294,22 +298,25 @@ func newPRLabelCommand(rootFlags *rootFlagSet) *cobra.Command {
 	return cmd
 }
 
-func mapPRLabelError(err error) error {
+func emitPRLabelFallbackWarning(w io.Writer) error {
+	return pipeline.EmitLogIssueWarning(w, pipeline.FallbackWarningMessage)
+}
+
+func mapPRLabelError(err error, result prlabel.Result) error {
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, prtitle.ErrInvalidConventionalCommit) {
-		return exitcodes.NewSemanticError(
-			fmt.Sprintf("pr title must be a conventional commit (e.g. \"feat: add login\"): %v", err),
-			err,
-		)
+		msg := fmt.Sprintf("pr title must be a conventional commit (e.g. \"feat: add login\"): %v", err)
+		if result.PRTitle != "" {
+			msg = fmt.Sprintf("pr title must be a conventional commit (e.g. \"feat: add login\"): invalid format in %q: %v", result.PRTitle, err)
+		}
+		return exitcodes.NewSemanticError(msg, err)
 	}
-	if errors.Is(err, prlabel.ErrEmptyBranch) || errors.Is(err, prlabel.ErrInvalidPR) {
+	if errors.Is(err, prlabel.ErrEmptyBranch) || errors.Is(err, prlabel.ErrInvalidPR) || errors.Is(err, prlabel.ErrNilClient) {
 		return exitcodes.WrapConfig(err)
 	}
-	if strings.Contains(err.Error(), "getting pull request title") ||
-		strings.Contains(err.Error(), "listing pr labels") ||
-		strings.Contains(err.Error(), "adding pr label") {
+	if errors.Is(err, prlabel.ErrADOAPI) {
 		return exitcodes.WrapADOAPI(err)
 	}
 	return err
