@@ -1,10 +1,11 @@
 module github.com/launchbynttdata/launch-ado-automatic-versioner
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/blang/semver/v4 v4.0.0
 	github.com/golangci/golangci-lint/v2 v2.12.2
+	github.com/leodido/go-conventionalcommits v0.13.0
 	github.com/microsoft/azure-devops-go-api/azuredevops/v7 v7.1.0
 	github.com/securego/gosec/v2 v2.28.0
 	github.com/spf13/cobra v1.10.2
@@ -188,7 +189,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/sashamelentyev/interfacebloat v1.1.0 // indirect
 	github.com/sashamelentyev/usestdlibvars v1.29.0 // indirect
-	github.com/sirupsen/logrus v1.9.4 // indirect
+	github.com/sirupsen/logrus v1.10.0 // indirect
 	github.com/sivchari/containedctx v1.0.3 // indirect
 	github.com/sonatard/noctx v0.5.1 // indirect
 	github.com/sourcegraph/go-diff v0.8.0 // indirect

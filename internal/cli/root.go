@@ -2,19 +2,24 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/ado"
+	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/cli/exitcodes"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/config"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/domain/branchmap"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/domain/bump"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/domain/labels"
+	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/domain/prtitle"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/domain/tagplan"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/logging"
+	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/pipeline"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/services/inferbump"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/services/prlabel"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/services/tagging"
@@ -36,8 +41,10 @@ const (
 	envBranchMinor = "AAV_BRANCH_MINOR_PREFIXES"
 	envBranchPatch = "AAV_BRANCH_PATCH_PREFIXES"
 
-	envPRID         = "AAV_PR_ID"
-	envSourceBranch = "AAV_SOURCE_BRANCH"
+	envPRID                = "AAV_PR_ID"
+	envSourceBranch        = "AAV_SOURCE_BRANCH"
+	envUsePRTitle          = "AAV_USE_PR_TITLE"
+	envAllowBranchFallback = "AAV_ALLOW_BRANCH_NAME_FALLBACK"
 
 	envCommit = "AAV_COMMIT_SHA"
 	envStrict = "AAV_STRICT"
@@ -169,6 +176,8 @@ func bindRootFlags(cmd *cobra.Command) *rootFlagSet {
 func newPRLabelCommand(rootFlags *rootFlagSet) *cobra.Command {
 	var prIDFlag *intFlag
 	var branchFlag *stringFlag
+	var usePRTitleFlag *boolFlag
+	var allowBranchFallbackFlag *boolFlag
 
 	cmd := &cobra.Command{
 		Use:   "pr-label",
@@ -186,27 +195,82 @@ func newPRLabelCommand(rootFlags *rootFlagSet) *cobra.Command {
 				return err
 			}
 			if prID <= 0 {
-				return fmt.Errorf("pr-id must be greater than zero")
+				return exitcodes.WrapConfig(fmt.Errorf("pr-id must be greater than zero"))
 			}
 
-			branch := branchFlag.Value(runtime.resolver)
-			if strings.TrimSpace(branch) == "" {
-				return fmt.Errorf("source-branch is required")
-			}
-
-			service := prlabel.NewService(runtime.client, runtime.branches, runtime.labels)
-			result, err := service.Apply(ctx, prlabel.Config{PRID: prID, Branch: branch})
+			usePRTitle, err := usePRTitleFlag.Value(runtime.resolver)
 			if err != nil {
 				return err
 			}
 
+			allowBranchFallback, err := allowBranchFallbackFlag.Value(runtime.resolver)
+			if err != nil {
+				return err
+			}
+			if allowBranchFallback && !usePRTitle {
+				return exitcodes.WrapConfig(fmt.Errorf("--allow-branch-name-fallback requires --use-pr-title"))
+			}
+
+			branch := branchFlag.Value(runtime.resolver)
+			if !usePRTitle && strings.TrimSpace(branch) == "" {
+				return exitcodes.WrapConfig(fmt.Errorf("source-branch is required"))
+			}
+			if usePRTitle && allowBranchFallback && strings.TrimSpace(branch) == "" {
+				return exitcodes.WrapConfig(fmt.Errorf("source-branch is required when --allow-branch-name-fallback is enabled"))
+			}
+
+			service := prlabel.NewService(runtime.client, runtime.branches, runtime.labels)
+			result, err := service.Apply(ctx, prlabel.Config{
+				PRID:                    prID,
+				Branch:                  branch,
+				UsePRTitle:              usePRTitle,
+				AllowBranchNameFallback: allowBranchFallback,
+			})
+			if err != nil {
+				if result.PRTitle != "" && errors.Is(err, prtitle.ErrInvalidConventionalCommit) {
+					runtime.logger.Error("invalid conventional commit PR title",
+						zap.Int("pr", prID),
+						zap.String("prTitle", result.PRTitle),
+						zap.Error(err),
+					)
+				}
+				return mapPRLabelError(err, result)
+			}
+
 			log := runtime.logger.With(
 				zap.Int("pr", prID),
-				zap.String("branch", branch),
 				zap.String("bump", result.Bump.String()),
-				zap.Bool("branchMatched", result.BranchMatched),
-				zap.String("matchedPrefix", result.MatchedPrefix),
+				zap.String("bumpSource", string(result.BumpSource)),
 			)
+
+			switch result.BumpSource {
+			case prlabel.BumpSourcePRTitle:
+				log = log.With(
+					zap.String("prTitle", result.PRTitle),
+					zap.String("commitType", result.CommitType),
+					zap.String("commitScope", result.CommitScope),
+				)
+			case prlabel.BumpSourceBranch, prlabel.BumpSourceBranchFallback:
+				log = log.With(
+					zap.String("branch", branch),
+					zap.Bool("branchMatched", result.BranchMatched),
+					zap.String("matchedPrefix", result.MatchedPrefix),
+				)
+			}
+
+			if result.FallbackUsed {
+				log.Warn("semver bump fell back to branch name",
+					zap.String("prTitle", result.PRTitle),
+					zap.String("branch", branch),
+					zap.String("fallbackReason", result.FallbackReason),
+					zap.String("bump", result.Bump.String()),
+					zap.String("matchedPrefix", result.MatchedPrefix),
+					zap.Bool("branchMatched", result.BranchMatched),
+				)
+				if err := emitPRLabelFallbackWarning(cmd.OutOrStdout()); err != nil {
+					return err
+				}
+			}
 
 			switch result.Decision {
 			case labels.DecisionAddExpected:
@@ -228,8 +292,34 @@ func newPRLabelCommand(rootFlags *rootFlagSet) *cobra.Command {
 	fs := cmd.Flags()
 	prIDFlag = bindIntFlag(fs, "pr-id", "pr-id", "", envPRID, 0, "Pull request ID to label")
 	branchFlag = bindStringFlag(fs, "source-branch", "source-branch", "", envSourceBranch, "", "Source branch name for the pull request")
+	usePRTitleFlag = bindBoolFlag(fs, "use-pr-title", "use-pr-title", "", envUsePRTitle, false, "Derive bump intent from the pull request title as a conventional commit")
+	allowBranchFallbackFlag = bindBoolFlag(fs, "allow-branch-name-fallback", "allow-branch-name-fallback", "", envAllowBranchFallback, false, "When --use-pr-title is enabled, fall back to branch prefixes if the title is invalid")
 
 	return cmd
+}
+
+func emitPRLabelFallbackWarning(w io.Writer) error {
+	return pipeline.EmitLogIssueWarning(w, pipeline.FallbackWarningMessage)
+}
+
+func mapPRLabelError(err error, result prlabel.Result) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, prtitle.ErrInvalidConventionalCommit) {
+		msg := fmt.Sprintf("pr title must be a conventional commit (e.g. \"feat: add login\"): %v", err)
+		if result.PRTitle != "" {
+			msg = fmt.Sprintf("pr title must be a conventional commit (e.g. \"feat: add login\"): invalid format in %q: %v", result.PRTitle, err)
+		}
+		return exitcodes.NewSemanticError(msg, err)
+	}
+	if errors.Is(err, prlabel.ErrEmptyBranch) || errors.Is(err, prlabel.ErrInvalidPR) || errors.Is(err, prlabel.ErrNilClient) {
+		return exitcodes.WrapConfig(err)
+	}
+	if errors.Is(err, prlabel.ErrADOAPI) {
+		return exitcodes.WrapADOAPI(err)
+	}
+	return err
 }
 
 func newInferCommand(rootFlags *rootFlagSet) *cobra.Command {

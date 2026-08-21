@@ -45,6 +45,9 @@ type Client interface {
 	// FindPullRequestByMergeCommit returns the pull request ID whose merge commit equals commitSHA.
 	FindPullRequestByMergeCommit(ctx context.Context, commitSHA string) (int, error)
 
+	// GetPullRequestTitle returns the title of the specified pull request.
+	GetPullRequestTitle(ctx context.Context, prID int) (string, error)
+
 	// ListPRLabels returns the labels currently applied to the specified pull request.
 	ListPRLabels(ctx context.Context, prID int) ([]string, error)
 

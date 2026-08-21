@@ -142,6 +142,11 @@ func (c *Client) FindPullRequestByMergeCommit(context.Context, string) (int, err
 	return 0, errors.New("adotest: pull request queries are not implemented")
 }
 
+// GetPullRequestTitle is not implemented for tag workflow tests.
+func (c *Client) GetPullRequestTitle(context.Context, int) (string, error) {
+	return "", errors.New("adotest: pull request title is not implemented")
+}
+
 // ListPRLabels is not implemented for tag workflow tests.
 func (c *Client) ListPRLabels(context.Context, int) ([]string, error) {
 	return nil, errors.New("adotest: pull request labels are not implemented")

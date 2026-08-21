@@ -7,7 +7,9 @@ import (
 
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/ado"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/domain/branchmap"
+	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/domain/bump"
 	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/domain/labels"
+	"github.com/launchbynttdata/launch-ado-automatic-versioner/internal/domain/prtitle"
 )
 
 func TestApplyAddsLabelWhenMissing(t *testing.T) {
@@ -23,6 +25,9 @@ func TestApplyAddsLabelWhenMissing(t *testing.T) {
 
 	if !result.LabelAdded {
 		t.Fatalf("expected label to be added")
+	}
+	if result.BumpSource != BumpSourceBranch {
+		t.Fatalf("expected branch bump source, got %s", result.BumpSource)
 	}
 	if len(client.added) != 1 || client.added[0].label != "semver-minor" {
 		t.Fatalf("expected semver-minor to be added, got %#v", client.added)
@@ -67,6 +72,89 @@ func TestApplyConflictDoesNotAdd(t *testing.T) {
 	}
 }
 
+func TestApplyPRTitleModeAddsLabel(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeClient{
+		labels:  []string{"needs-review"},
+		prTitle: "feat(auth): add SSO",
+	}
+	svc := NewService(client, branchmap.NewResolver(branchmap.DefaultMapping()), labels.NewResolver(labels.Config{}))
+
+	result, err := svc.Apply(context.Background(), Config{PRID: 42, UsePRTitle: true})
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !result.LabelAdded {
+		t.Fatalf("expected label to be added")
+	}
+	if result.BumpSource != BumpSourcePRTitle {
+		t.Fatalf("expected pr-title source, got %s", result.BumpSource)
+	}
+	if result.Bump != bump.BumpMinor {
+		t.Fatalf("expected minor bump, got %s", result.Bump)
+	}
+	if result.CommitType != "feat" {
+		t.Fatalf("expected feat type, got %s", result.CommitType)
+	}
+	if len(client.added) != 1 || client.added[0].label != "semver-minor" {
+		t.Fatalf("expected semver-minor to be added, got %#v", client.added)
+	}
+}
+
+func TestApplyPRTitleInvalidWithoutFallback(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeClient{
+		labels:  []string{"needs-review"},
+		prTitle: "WIP stuff",
+	}
+	svc := NewService(client, branchmap.NewResolver(branchmap.DefaultMapping()), labels.NewResolver(labels.Config{}))
+
+	_, err := svc.Apply(context.Background(), Config{PRID: 42, UsePRTitle: true})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !errors.Is(err, prtitle.ErrInvalidConventionalCommit) {
+		t.Fatalf("expected ErrInvalidConventionalCommit, got %v", err)
+	}
+	if len(client.added) != 0 {
+		t.Fatalf("expected no label additions")
+	}
+}
+
+func TestApplyPRTitleFallbackUsesBranch(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeClient{
+		labels:  []string{"needs-review"},
+		prTitle: "WIP stuff",
+	}
+	svc := NewService(client, branchmap.NewResolver(branchmap.DefaultMapping()), labels.NewResolver(labels.Config{}))
+
+	result, err := svc.Apply(context.Background(), Config{
+		PRID:                    42,
+		Branch:                  "feature/foo",
+		UsePRTitle:              true,
+		AllowBranchNameFallback: true,
+	})
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if !result.FallbackUsed {
+		t.Fatalf("expected fallback to be used")
+	}
+	if result.BumpSource != BumpSourceBranchFallback {
+		t.Fatalf("expected branch-fallback source, got %s", result.BumpSource)
+	}
+	if result.Bump != bump.BumpMinor {
+		t.Fatalf("expected minor bump from branch, got %s", result.Bump)
+	}
+	if len(client.added) != 1 || client.added[0].label != "semver-minor" {
+		t.Fatalf("expected semver-minor to be added, got %#v", client.added)
+	}
+}
+
 func TestApplyValidations(t *testing.T) {
 	t.Parallel()
 
@@ -82,6 +170,14 @@ func TestApplyValidations(t *testing.T) {
 	}
 	if _, err := svc.Apply(context.Background(), Config{PRID: 1, Branch: ""}); !errors.Is(err, ErrEmptyBranch) {
 		t.Fatalf("expected ErrEmptyBranch got %v", err)
+	}
+	if _, err := svc.Apply(context.Background(), Config{
+		PRID:                    1,
+		UsePRTitle:              true,
+		AllowBranchNameFallback: true,
+		Branch:                  "",
+	}); !errors.Is(err, ErrEmptyBranch) {
+		t.Fatalf("expected ErrEmptyBranch for fallback without branch got %v", err)
 	}
 }
 
@@ -99,13 +195,21 @@ func TestApplyClientErrors(t *testing.T) {
 	if _, err := svc.Apply(context.Background(), Config{PRID: 1, Branch: "feature/foo"}); err == nil {
 		t.Fatalf("expected error from add")
 	}
+
+	client = &fakeClient{titleErr: errors.New("title-fail")}
+	svc = NewService(client, branchmap.NewResolver(branchmap.DefaultMapping()), labels.NewResolver(labels.Config{}))
+	if _, err := svc.Apply(context.Background(), Config{PRID: 1, UsePRTitle: true}); err == nil {
+		t.Fatalf("expected error from title fetch")
+	}
 }
 
 type fakeClient struct {
-	labels  []string
-	listErr error
-	addErr  error
-	added   []addedCall
+	labels   []string
+	prTitle  string
+	listErr  error
+	addErr   error
+	titleErr error
+	added    []addedCall
 }
 
 type addedCall struct {
@@ -139,6 +243,13 @@ func (f *fakeClient) AddPRLabel(_ context.Context, prID int, label string) error
 
 func (f *fakeClient) FindPullRequestByMergeCommit(context.Context, string) (int, error) {
 	return 0, ado.ErrPullRequestNotFound
+}
+
+func (f *fakeClient) GetPullRequestTitle(context.Context, int) (string, error) {
+	if f.titleErr != nil {
+		return "", f.titleErr
+	}
+	return f.prTitle, nil
 }
 
 func (f *fakeClient) CreateAnnotatedTag(context.Context, ado.TagSpec) error {

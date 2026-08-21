@@ -170,6 +170,40 @@ func (c *sdkClient) FindPullRequestByMergeCommit(ctx context.Context, commitSHA 
 	return prID, nil
 }
 
+// GetPullRequestTitle returns the title of the specified pull request.
+func (c *sdkClient) GetPullRequestTitle(ctx context.Context, prID int) (string, error) {
+	if prID <= 0 {
+		return "", errors.New("ado client: invalid pull request id")
+	}
+
+	args := git.GetPullRequestArgs{
+		Project:       c.project,
+		RepositoryId:  c.repository,
+		PullRequestId: &prID,
+	}
+
+	pr, err := c.git.GetPullRequest(ctx, args)
+	if err != nil {
+		return "", fmt.Errorf("getting pull request: %w", err)
+	}
+
+	return pullRequestTitleFromGitPR(pr)
+}
+
+// pullRequestTitleFromGitPR extracts and validates a non-empty title from a Git pull request.
+func pullRequestTitleFromGitPR(pr *git.GitPullRequest) (string, error) {
+	if pr == nil || pr.Title == nil {
+		return "", errors.New("ado client: pull request title is empty")
+	}
+
+	title := strings.TrimSpace(*pr.Title)
+	if title == "" {
+		return "", errors.New("ado client: pull request title is empty")
+	}
+
+	return title, nil
+}
+
 // ListPRLabels returns the labels currently applied to the pull request.
 func (c *sdkClient) ListPRLabels(ctx context.Context, prID int) ([]string, error) {
 	args := git.GetPullRequestLabelsArgs{

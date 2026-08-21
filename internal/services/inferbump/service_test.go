@@ -139,6 +139,10 @@ func (f *fakeClient) FindPullRequestByMergeCommit(_ context.Context, _ string) (
 	return f.prID, nil
 }
 
+func (f *fakeClient) GetPullRequestTitle(context.Context, int) (string, error) {
+	return "", nil
+}
+
 func (f *fakeClient) ListPRLabels(context.Context, int) ([]string, error) {
 	if f.labelsErr != nil {
 		return nil, f.labelsErr

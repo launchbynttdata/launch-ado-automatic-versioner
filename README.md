@@ -5,6 +5,7 @@
 ## Key Features
 
 - Automatic branch → bump mapping with conflict-safe PR labeling
+- Optional PR-title mode: derive bump intent from conventional commit PR titles (with optional branch-name fallback)
 - PR merge inference that survives squash merges and defaults safely when strict mode is off
 - Release and RC tag planning using validated SemVer math (powered by `github.com/blang/semver/v4`)
 - Annotated tag creation through the official Azure DevOps SDK with tagger metadata and commit targeting
@@ -69,6 +70,27 @@ stages:
                 --source-branch $(System.PullRequest.SourceBranch)
             displayName: Apply semver label
 
+  # Optional: derive bump from conventional commit PR titles
+  # - stage: PRValidation
+  #   jobs:
+  #     - job: LabelPRFromTitle
+  #       steps:
+  #         - checkout: self
+  #         - script: |
+  #             go run ./cmd/aav pr-label \
+  #               --pr-id $(System.PullRequest.PullRequestId) \
+  #               --use-pr-title
+  #           displayName: Apply semver label from PR title
+  #
+  # Optional: PR title preferred, branch prefix fallback on invalid titles
+  #         - script: |
+  #             go run ./cmd/aav pr-label \
+  #               --pr-id $(System.PullRequest.PullRequestId) \
+  #               --source-branch $(System.PullRequest.SourceBranch) \
+  #               --use-pr-title \
+  #               --allow-branch-name-fallback
+  #           displayName: Apply semver label (title with branch fallback)
+
   - stage: MainRelease
     condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
     dependsOn: PRValidation
@@ -106,7 +128,9 @@ stages:
 | Minor branch prefixes | `AAV_BRANCH_MINOR_PREFIXES` | `--branch-minor-prefix` | `feature/,minor/` | Repeatable flag; env uses comma-separated list (e.g. `feature/,minor/`) |
 | Patch branch prefixes | `AAV_BRANCH_PATCH_PREFIXES` | `--branch-patch-prefix` | `bugfix/,fix/,hotfix/,chore/,patch/` | Repeatable flag; env uses comma-separated list (e.g. `bugfix/,fix/`) |
 | PR ID | `AAV_PR_ID` | `--pr-id` | _required by pr-label_ | Integer > 0 |
-| Source branch | `AAV_SOURCE_BRANCH` | `--source-branch` | _required by pr-label_ | Branch that triggered PR |
+| Source branch | `AAV_SOURCE_BRANCH` | `--source-branch` | _required by pr-label (branch mode)_ | Branch that triggered PR; required when `--allow-branch-name-fallback` is set |
+| Use PR title | `AAV_USE_PR_TITLE` | `--use-pr-title` | `false` | Parse PR title as a conventional commit for bump intent |
+| Branch fallback | `AAV_ALLOW_BRANCH_NAME_FALLBACK` | `--allow-branch-name-fallback` | `false` | With `--use-pr-title`, fall back to branch prefixes when the title is invalid |
 | Commit SHA | `AAV_COMMIT_SHA` | `--commit-sha` | _required by infer-bump/create-tag_ | 40-char SHA |
 | Strict mode | `AAV_STRICT` | `--strict` | `false` | Only applies to `infer-bump` |
 | Tag mode | `AAV_TAG_MODE` | `--tag-mode` | _required by create-tag_ | `release` or `rc` |
@@ -122,11 +146,44 @@ stages:
 
 > **Branch prefix env format**: When using the environment variables above, provide comma-separated prefixes with no quotes (e.g. `AAV_BRANCH_MINOR_PREFIXES=feature/,minor/`). Use the repeatable CLI flags when you prefer to specify each prefix individually.
 
+### PR title conventional commits
+
+When `--use-pr-title` is enabled, `pr-label` fetches the PR title from ADO and parses it as a [Conventional Commit](https://www.conventionalcommits.org/) header. Scoped titles are supported (e.g. `chore(ci): update pipelines`, `feat(enhancement): add capability`).
+
+Only the **PR title** is inspected — not the PR description/body. In practice, mark breaking changes with `!` in the title (`feat!: …` or `fix(api)!: …`). A multiline title that embeds a `BREAKING CHANGE:` footer is also recognized, but Azure DevOps titles are typically single-line, so the `!` marker is the reliable ADO pattern.
+
+| Condition | Bump |
+| --- | --- |
+| Breaking change (`!` in the title header, or `BREAKING CHANGE` footer in the title text) | `major` |
+| `feat` | `minor` |
+| `perf` | `minor` |
+| `fix` | `patch` |
+| Other conventional types (`chore`, `docs`, `refactor`, `ci`, `test`, `build`, `style`, `revert`) | `patch` |
+
+Types outside that allowlist (for example `infra:` or `deps:`) are **rejected** with exit code `3` when fallback is disabled — they do not default to patch.
+
+When `--allow-branch-name-fallback` is set and the title is invalid, bump intent falls back to branch prefixes. The CLI emits a loud Zap warning (including the invalid title) and writes this exact Azure Pipelines warning line to stdout:
+
+```text
+##vso[task.logissue type=warning;]Semver calculation fallback to branch name
+```
+
+### Exit codes
+
+Structured exit codes currently apply to **`pr-label`**. Other subcommands still exit `1` for most failures.
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success |
+| `1` | Configuration or CLI validation error |
+| `2` | Azure DevOps API error |
+| `3` | Semantic validation error (invalid conventional commit PR title when fallback is disabled) |
+
 ## Subcommands
 
 | Command | When to use | Behavior |
 | --- | --- | --- |
-| `pr-label` | Pull-request validation | Resolves bump intent from the source branch, ensures the expected semver label exists, loudly warns on conflicts, and never removes user labels. |
+| `pr-label` | Pull-request validation | Resolves bump intent from the source branch (default) or PR title (`--use-pr-title`), ensures the expected semver label exists, loudly warns on conflicts, and never removes user labels. Invalid PR titles fail with exit code 3 unless `--allow-branch-name-fallback` is enabled. |
 | `infer-bump` | Main-branch CI after squash merge | Locates the PR by merge commit, rehydrates bump intent from labels, defaults to `patch` unless `--strict` is set. Prints `major`, `minor`, or `patch` to stdout for scripting. |
 | `create-tag` | Release/RC tagging stages | Discovers existing tags, computes the next SemVer (release or RC), and creates an annotated tag on the desired commit with full trace logging. |
 | `version` | Introspection | Prints the embedded semantic version and build date for the running binary. |
@@ -257,7 +314,8 @@ launch-ado-automatic-versioner/
 │   ├── ado/               # Azure DevOps client
 │   ├── cli/               # Cobra commands and flags
 │   ├── config/            # Configuration resolution
-│   ├── domain/            # Business logic (branchmap, bump, labels, tagplan)
+│   ├── domain/            # Business logic (branchmap, bump, labels, prtitle, tagplan)
+│   ├── pipeline/          # Azure Pipelines output helpers
 │   ├── logging/           # Structured logging
 │   ├── services/          # Service layer (inferbump, prlabel, tagging)
 │   └── version/           # Build metadata

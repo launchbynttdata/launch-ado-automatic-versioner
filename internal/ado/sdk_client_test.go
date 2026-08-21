@@ -116,3 +116,58 @@ func TestErrIfRefDeleteUpdateRejected(t *testing.T) {
 		})
 	}
 }
+
+func TestPullRequestTitleFromGitPR(t *testing.T) {
+	t.Parallel()
+
+	title := "feat: add login"
+	blank := "   "
+
+	cases := []struct {
+		name    string
+		pr      *git.GitPullRequest
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "valid title",
+			pr:   &git.GitPullRequest{Title: &title},
+			want: title,
+		},
+		{
+			name:    "nil pull request",
+			pr:      nil,
+			wantErr: true,
+		},
+		{
+			name:    "nil title",
+			pr:      &git.GitPullRequest{},
+			wantErr: true,
+		},
+		{
+			name:    "blank title",
+			pr:      &git.GitPullRequest{Title: &blank},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := pullRequestTitleFromGitPR(tc.pr)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
