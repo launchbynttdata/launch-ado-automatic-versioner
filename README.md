@@ -118,7 +118,7 @@ stages:
 | Org URL | `AAV_ORG_URL` | `--org-url` | _required_ | `https://dev.azure.com/{org}` |
 | Project | `AAV_PROJECT` | `--project` | _required_ | ADO project name |
 | Repository | `AAV_REPO` | `--repo` | _required_ | Git repo name |
-| Token | `AAV_TOKEN` | `--token` | _required_ | PAT or `System.AccessToken` |
+| Token | `AAV_TOKEN` | `--token-stdin` | _required_ | PAT or `System.AccessToken` (via env or stdin; never pass secrets in CLI args) |
 | Log level | `AAV_LOG_LEVEL` | `--log-level` | `terse` | `verbose` prints config + trace |
 | Label prefix | `AAV_LABEL_PREFIX` | `--label-prefix` | `semver-` | Empty string allowed |
 | Major label | `AAV_LABEL_MAJOR` | `--label-major` | derived | Overrides prefix value |
@@ -241,7 +241,7 @@ The tests call `go run ./cmd/aav ...` so they verify the built binary end-to-end
 
 ## Contributing
 
-- Go 1.26.4+ is required (for standard library security patches). Run `make deps` to install dependencies and Go tools, then `make ci-local` to mirror CI locally.
+- Go 1.27.4+ is required (for standard library security patches). Run `make deps` to install dependencies and Go tools, then `make ci-local` to mirror CI locally.
 - Keep Go modules tidy and run `go test ./...` before submitting changes.
 - Follow the layered architecture: keep business logic separate from Azure SDK calls and CLI plumbing.
 - Add unit tests alongside any new exported behavior. Mock the ADO client for service tests.
