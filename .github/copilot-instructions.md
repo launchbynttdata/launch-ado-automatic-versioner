@@ -176,7 +176,7 @@ If env and CLI differ:
 - `AAV_ORG_URL` / `--org-url`
 - `AAV_PROJECT` / `--project`
 - `AAV_REPO` / `--repo`
-- `AAV_TOKEN` / `--token`
+- `AAV_TOKEN` / `--token-stdin`
 
 #### Logging
 
