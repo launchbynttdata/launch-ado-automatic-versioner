@@ -36,8 +36,10 @@ AAV_TAGGER_NAME="Build Bot" AAV_TAGGER_EMAIL=ci@example.com ./bin/aav create-tag
 
 ### Running in Azure Pipelines
 
-- **PR validation**: call `aav pr-label` after checkout and before policy evaluation.
-- **Main pipeline**: run `aav infer-bump --commit-sha $(Build.SourceVersion)` to capture intent, export its stdout, then invoke `aav create-tag` (release or RC mode) with that bump.
+- **Trust boundary & least privilege**: Never execute `aav` from an untrusted pull-request checkout (`go run ./cmd/aav`) inside a job that holds credentials able to mutate pull-request or repository state. Instead, download a pinned release archive and verify its SHA-256 digest before executing the binary. Because `aav pr-label` operates solely through the Azure DevOps REST API and pipeline metadata, run the labeling job with `checkout: none` so untrusted pull-request code is never present in the credentialed workspace. If your pipeline also compiles or tests the pull request, run those steps in a separate job without `AAV_TOKEN` or `System.AccessToken`.
+- **Safe parameter passing**: Map Azure Pipelines expressions (such as `$(System.PullRequest.SourceBranch)`) into `AAV_*` environment variables via the step's `env:` block rather than interpolating them directly into shell scripts.
+- **PR validation**: call `aav pr-label` in a dedicated `checkout: none` job before policy evaluation. Give the job identity only the repository permissions needed to read and label pull requests (`Contribute to pull requests`).
+- **Main pipeline**: run `aav infer-bump` to capture bump intent, export its stdout, then invoke `aav create-tag` (release or RC mode) with that bump.
 
 ```yaml
 # azure-pipelines.yml
@@ -52,6 +54,8 @@ pr:
       - '*'
 
 variables:
+  AAV_VERSION: '1.1.3'
+  AAV_SHA256: '0e170390fdb52ec8f3abcc4be83504ae0cbbd8aa1c7c383ccf6788ce8362f1de'
   AAV_ORG_URL: $(System.TeamFoundationCollectionUri)
   AAV_PROJECT: $(System.TeamProject)
   AAV_REPO: $(Build.Repository.Name)
@@ -63,33 +67,49 @@ stages:
     jobs:
       - job: LabelPR
         steps:
-          - checkout: self
+          - checkout: none
           - script: |
-              go run ./cmd/aav pr-label \
-                --pr-id $(System.PullRequest.PullRequestId) \
-                --source-branch $(System.PullRequest.SourceBranch)
+              set -euo pipefail
+              ARCHIVE="launch-ado-automatic-versioner_${AAV_VERSION}_Linux_x86_64.tar.gz"
+              curl -fsSLo "${ARCHIVE}" \
+                "https://github.com/launchbynttdata/launch-ado-automatic-versioner/releases/download/v${AAV_VERSION}/${ARCHIVE}"
+              echo "${AAV_SHA256}  ${ARCHIVE}" | sha256sum -c -
+              tar -xzf "${ARCHIVE}" launch-ado-automatic-versioner
+              install -m 0755 launch-ado-automatic-versioner "$(Agent.TempDirectory)/aav"
+            displayName: Install verified aav binary
+            env:
+              AAV_VERSION: $(AAV_VERSION)
+              AAV_SHA256: $(AAV_SHA256)
+          - script: |
+              set -euo pipefail
+              "$(Agent.TempDirectory)/aav" pr-label
             displayName: Apply semver label
+            env:
+              AAV_TOKEN: $(System.AccessToken)
+              AAV_PR_ID: $(System.PullRequest.PullRequestId)
+              AAV_SOURCE_BRANCH: $(System.PullRequest.SourceBranch)
 
-  # Optional: derive bump from conventional commit PR titles
-  # - stage: PRValidation
-  #   jobs:
-  #     - job: LabelPRFromTitle
-  #       steps:
-  #         - checkout: self
-  #         - script: |
-  #             go run ./cmd/aav pr-label \
-  #               --pr-id $(System.PullRequest.PullRequestId) \
-  #               --use-pr-title
-  #           displayName: Apply semver label from PR title
-  #
-  # Optional: PR title preferred, branch prefix fallback on invalid titles
-  #         - script: |
-  #             go run ./cmd/aav pr-label \
-  #               --pr-id $(System.PullRequest.PullRequestId) \
-  #               --source-branch $(System.PullRequest.SourceBranch) \
-  #               --use-pr-title \
-  #               --allow-branch-name-fallback
-  #           displayName: Apply semver label (title with branch fallback)
+          # Optional: derive bump from conventional commit PR titles
+          # - script: |
+          #     set -euo pipefail
+          #     "$(Agent.TempDirectory)/aav" pr-label
+          #   displayName: Apply semver label from PR title
+          #   env:
+          #     AAV_TOKEN: $(System.AccessToken)
+          #     AAV_PR_ID: $(System.PullRequest.PullRequestId)
+          #     AAV_USE_PR_TITLE: 'true'
+          #
+          # Optional: PR title preferred, branch prefix fallback on invalid titles
+          # - script: |
+          #     set -euo pipefail
+          #     "$(Agent.TempDirectory)/aav" pr-label
+          #   displayName: Apply semver label (title with branch fallback)
+          #   env:
+          #     AAV_TOKEN: $(System.AccessToken)
+          #     AAV_PR_ID: $(System.PullRequest.PullRequestId)
+          #     AAV_SOURCE_BRANCH: $(System.PullRequest.SourceBranch)
+          #     AAV_USE_PR_TITLE: 'true'
+          #     AAV_ALLOW_BRANCH_NAME_FALLBACK: 'true'
 
   - stage: MainRelease
     condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
@@ -97,18 +117,36 @@ stages:
     jobs:
       - job: TagRelease
         steps:
-          - checkout: self
+          - checkout: none
           - script: |
-              BUMP=$(go run ./cmd/aav infer-bump \
-                --commit-sha $(Build.SourceVersion))
+              set -euo pipefail
+              ARCHIVE="launch-ado-automatic-versioner_${AAV_VERSION}_Linux_x86_64.tar.gz"
+              curl -fsSLo "${ARCHIVE}" \
+                "https://github.com/launchbynttdata/launch-ado-automatic-versioner/releases/download/v${AAV_VERSION}/${ARCHIVE}"
+              echo "${AAV_SHA256}  ${ARCHIVE}" | sha256sum -c -
+              tar -xzf "${ARCHIVE}" launch-ado-automatic-versioner
+              install -m 0755 launch-ado-automatic-versioner "$(Agent.TempDirectory)/aav"
+            displayName: Install verified aav binary
+            env:
+              AAV_VERSION: $(AAV_VERSION)
+              AAV_SHA256: $(AAV_SHA256)
+          - script: |
+              set -euo pipefail
+              BUMP=$("$(Agent.TempDirectory)/aav" infer-bump)
               echo "##vso[task.setvariable variable=AAV_BUMP]$BUMP"
             displayName: Infer bump
+            env:
+              AAV_TOKEN: $(System.AccessToken)
+              AAV_COMMIT_SHA: $(Build.SourceVersion)
           - script: |
-              go run ./cmd/aav create-tag \
-                --commit-sha $(Build.SourceVersion) \
-                --tag-mode release \
-                --bump $(AAV_BUMP)
+              set -euo pipefail
+              "$(Agent.TempDirectory)/aav" create-tag
             displayName: Create release tag
+            env:
+              AAV_TOKEN: $(System.AccessToken)
+              AAV_COMMIT_SHA: $(Build.SourceVersion)
+              AAV_TAG_MODE: release
+              AAV_BUMP: $(AAV_BUMP)
 ```
 
 ## Configuration Reference
