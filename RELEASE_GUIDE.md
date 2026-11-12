@@ -4,16 +4,27 @@ This guide helps you test the GoReleaser setup locally before pushing tags.
 
 ## Prerequisites
 
-Install GoReleaser:
+Install a pinned GoReleaser release and verify its SHA-256 checksum before executing the binary:
 ```bash
-# macOS
-brew install goreleaser
+# Linux (x86_64) — GoReleaser v2.20.2
+GORELEASER_VERSION="2.20.2"
+ARCHIVE="goreleaser_Linux_x86_64.tar.gz"
+EXPECTED_SHA256="f3d24969a7389a46613875711d15a96d8f6ef1553d84c6ace09d69ac1e7d44c0"
+curl -fsSLo "${ARCHIVE}" \
+  "https://github.com/goreleaser/goreleaser/releases/download/v${GORELEASER_VERSION}/${ARCHIVE}"
+echo "${EXPECTED_SHA256}  ${ARCHIVE}" | sha256sum -c -
+tar -xzf "${ARCHIVE}" goreleaser
+sudo install -m 0755 goreleaser /usr/local/bin/goreleaser
 
-# Linux
-curl -sfL https://goreleaser.com/static/run | bash -s -- install
-
-# Or use the one-shot command (as we did)
-curl -sfL https://goreleaser.com/static/run | sh -s -- check
+# macOS (universal) — GoReleaser v2.20.2
+GORELEASER_VERSION="2.20.2"
+ARCHIVE="goreleaser_Darwin_all.tar.gz"
+EXPECTED_SHA256="cfe608963d9b00656da24bf356c0a067e2e92ce99710be4ac19e418a3a695ec3"
+curl -fsSLo "${ARCHIVE}" \
+  "https://github.com/goreleaser/goreleaser/releases/download/v${GORELEASER_VERSION}/${ARCHIVE}"
+echo "${EXPECTED_SHA256}  ${ARCHIVE}" | shasum -a 256 -c -
+tar -xzf "${ARCHIVE}" goreleaser
+sudo install -m 0755 goreleaser /usr/local/bin/goreleaser
 ```
 
 ## Local Testing
