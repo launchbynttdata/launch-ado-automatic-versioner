@@ -171,3 +171,130 @@ func TestPullRequestTitleFromGitPR(t *testing.T) {
 		})
 	}
 }
+
+func TestCanonicalizeOrganizationURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:  "azure devops services canonical url",
+			input: "https://dev.azure.com/my-org",
+			want:  "https://dev.azure.com/my-org",
+		},
+		{
+			name:  "azure devops services with trailing slash and uppercase host",
+			input: "HTTPS://DEV.AZURE.COM/my-org/",
+			want:  "https://dev.azure.com/my-org",
+		},
+		{
+			name:  "explicit default port 443 is normalized",
+			input: "https://dev.azure.com:443/my-org",
+			want:  "https://dev.azure.com/my-org",
+		},
+		{
+			name:  "visualstudio.com host",
+			input: "https://my-org.visualstudio.com/",
+			want:  "https://my-org.visualstudio.com",
+		},
+		{
+			name:  "azure devops server collection path",
+			input: "https://ado.corp.example.com/tfs/DefaultCollection/",
+			want:  "https://ado.corp.example.com/tfs/DefaultCollection",
+		},
+		{
+			name:    "rejects empty url",
+			input:   "   ",
+			wantErr: true,
+		},
+		{
+			name:    "rejects http scheme",
+			input:   "http://dev.azure.com/my-org",
+			wantErr: true,
+		},
+		{
+			name:    "rejects relative url",
+			input:   "/my-org",
+			wantErr: true,
+		},
+		{
+			name:    "rejects userinfo",
+			input:   "https://user:pass@dev.azure.com/my-org",
+			wantErr: true,
+		},
+		{
+			name:    "rejects query string",
+			input:   "https://dev.azure.com/my-org?foo=bar",
+			wantErr: true,
+		},
+		{
+			name:    "rejects force query question mark",
+			input:   "https://dev.azure.com/my-org?",
+			wantErr: true,
+		},
+		{
+			name:    "rejects fragment",
+			input:   "https://dev.azure.com/my-org#frag",
+			wantErr: true,
+		},
+		{
+			name:    "rejects non-443 port",
+			input:   "https://dev.azure.com:8443/my-org",
+			wantErr: true,
+		},
+		{
+			name:    "rejects localhost",
+			input:   "https://localhost/my-org",
+			wantErr: true,
+		},
+		{
+			name:    "rejects single-label hostname",
+			input:   "https://intranet/my-org",
+			wantErr: true,
+		},
+		{
+			name:    "rejects ipv4 literal",
+			input:   "https://127.0.0.1/my-org",
+			wantErr: true,
+		},
+		{
+			name:    "rejects ipv6 literal",
+			input:   "https://[::1]/my-org",
+			wantErr: true,
+		},
+		{
+			name:    "rejects relative dot segments in path",
+			input:   "https://dev.azure.com/my-org/../other",
+			wantErr: true,
+		},
+		{
+			name:    "rejects whitespace or backslash",
+			input:   "https://dev.azure.com/my\\org",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := canonicalizeOrganizationURL(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for %q, got %q", tc.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error for %q: %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

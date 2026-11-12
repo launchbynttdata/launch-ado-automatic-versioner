@@ -115,7 +115,7 @@ stages:
 
 | Purpose | Environment Variable | Flag | Default | Notes |
 | --- | --- | --- | --- | --- |
-| Org URL | `AAV_ORG_URL` | `--org-url` | _required_ | `https://dev.azure.com/{org}` |
+| Org URL | `AAV_ORG_URL` | `--org-url` | _required_ | Absolute `https://` URL on default port 443 with a qualified hostname and no userinfo, query, or fragment (e.g. `https://dev.azure.com/{org}`, `https://{org}.visualstudio.com`, or `https://ado.example.com/tfs/{collection}`) |
 | Project | `AAV_PROJECT` | `--project` | _required_ | ADO project name |
 | Repository | `AAV_REPO` | `--repo` | _required_ | Git repo name |
 | Token | `AAV_TOKEN` | `--token` | _required_ | PAT or `System.AccessToken` |
