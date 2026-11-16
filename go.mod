@@ -9,7 +9,7 @@ require (
 	github.com/microsoft/azure-devops-go-api/azuredevops/v7 v7.1.0
 	github.com/securego/gosec/v2 v2.30.0
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	go.uber.org/zap v1.28.0
 	golang.org/x/vuln v1.9.0
 )
