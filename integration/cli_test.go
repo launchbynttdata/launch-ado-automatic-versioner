@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -105,6 +106,38 @@ func TestIntegrationWorkflowFailureModes(t *testing.T) {
 		envStrict: "true",
 	}); err == nil {
 		t.Fatalf("expected infer-bump to fail with invalid commit; stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
+func TestIntegrationRemoteURLAndGitAuthDoNotLeakSecret(t *testing.T) {
+	t.Parallel()
+	const canary = "super-secret-pat-canary-987654"
+	cfg := envConfig{
+		OrgURL:  "https://dev.azure.com/example-org",
+		Project: "example-project",
+		Repo:    "example-repo",
+		Token:   canary,
+	}
+
+	remote := remoteRepositoryURL(cfg)
+	if strings.Contains(remote, canary) || strings.Contains(remote, "@") {
+		t.Fatalf("remoteRepositoryURL leaked credential or userinfo: %q", remote)
+	}
+
+	dir := t.TempDir()
+	cmd := exec.Command("git", "init", dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	cmd = exec.Command("git", "-C", dir, "remote", "add", "origin", remote)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git remote add: %v: %s", err, out)
+	}
+	assertGitConfigHasNoSecret(t, dir, canary)
+
+	sanitized := sanitizeOutput([]byte("fatal: auth failed for "+canary), canary)
+	if strings.Contains(sanitized, canary) {
+		t.Fatalf("sanitizeOutput leaked canary: %q", sanitized)
 	}
 }
 
@@ -432,12 +465,13 @@ type gitWorkspace struct {
 func cloneRepository(t *testing.T, cfg envConfig) string {
 	t.Helper()
 	dir := t.TempDir()
-	remote := authenticatedRemoteURL(cfg)
+	remote := remoteRepositoryURL(cfg)
 	cmd := exec.Command("git", "clone", remote, dir)
-	cmd.Env = append(os.Environ(), gitTerminalPromptOff)
+	cmd.Env = gitAuthEnv(cfg.Token)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git clone failed: %s", sanitizeOutput(output, cfg.Token))
 	}
+	assertGitConfigHasNoSecret(t, dir, cfg.Token)
 	workspace := &gitWorkspace{dir: dir, cfg: cfg}
 	workspace.run(t, "config", "user.name", cfg.GitAuthorName)
 	workspace.run(t, "config", "user.email", cfg.GitAuthorEmail)
@@ -484,7 +518,7 @@ func (w *gitWorkspace) run(t *testing.T, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = w.dir
-	cmd.Env = append(os.Environ(), gitTerminalPromptOff)
+	cmd.Env = gitAuthEnv(w.cfg.Token)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s failed: %s", strings.Join(args, " "), sanitizeOutput(output, w.cfg.Token))
 	}
@@ -493,7 +527,7 @@ func (w *gitWorkspace) run(t *testing.T, args ...string) {
 func (w *gitWorkspace) runOptional(args ...string) error {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = w.dir
-	cmd.Env = append(os.Environ(), gitTerminalPromptOff)
+	cmd.Env = gitAuthEnv(w.cfg.Token)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git %s failed: %s", strings.Join(args, " "), sanitizeOutput(output, w.cfg.Token))
 	}
@@ -809,14 +843,42 @@ func projectRoot(t *testing.T) string {
 	}
 }
 
-func authenticatedRemoteURL(cfg envConfig) string {
+func remoteRepositoryURL(cfg envConfig) string {
 	remote := fmt.Sprintf("%s/%s/_git/%s", strings.TrimSuffix(cfg.OrgURL, "/"), url.PathEscape(cfg.Project), url.PathEscape(cfg.Repo))
 	u, err := url.Parse(remote)
 	if err != nil {
 		panic(err)
 	}
-	u.User = url.UserPassword("aav", cfg.Token)
+	u.User = nil
 	return u.String()
+}
+
+func gitAuthEnv(token string) []string {
+	basic := base64.StdEncoding.EncodeToString([]byte("aav:" + token))
+	return append(
+		os.Environ(),
+		gitTerminalPromptOff,
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=http.extraHeader",
+		fmt.Sprintf("GIT_CONFIG_VALUE_0=Authorization: Basic %s", basic),
+	)
+}
+
+func assertGitConfigHasNoSecret(t *testing.T, repoDir, secret string) {
+	t.Helper()
+	if strings.TrimSpace(secret) == "" {
+		return
+	}
+	cfgPath := filepath.Join(repoDir, ".git", "config")
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatalf("reading .git/config: %v", err)
+	}
+	basic := base64.StdEncoding.EncodeToString([]byte("aav:" + secret))
+	content := string(data)
+	if strings.Contains(content, secret) || strings.Contains(content, basic) {
+		t.Fatalf(".git/config unexpectedly contains secret credential material")
+	}
 }
 
 func stringValue(value *string) string {
