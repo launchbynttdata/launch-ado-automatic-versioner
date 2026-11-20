@@ -37,8 +37,11 @@ AAV_TAGGER_NAME="Build Bot" AAV_TAGGER_EMAIL=ci@example.com ./bin/aav create-tag
 ### Running in Azure Pipelines
 
 - **Trust boundary & least privilege**: Never execute `aav` from an untrusted pull-request checkout (`go run ./cmd/aav`) inside a job that holds credentials able to mutate pull-request or repository state. Instead, download a pinned release archive and verify its SHA-256 digest before executing the binary. Because `aav pr-label` operates solely through the Azure DevOps REST API and pipeline metadata, run the labeling job with `checkout: none` so untrusted pull-request code is never present in the credentialed workspace. If your pipeline also compiles or tests the pull request, run those steps in a separate job without `AAV_TOKEN` or `System.AccessToken`.
+- **Pipeline definition boundary**: In Azure Repos PR validation, the pipeline YAML can be evaluated from the pull request's merge ref. If contributors can edit that YAML in PRs, they can also alter these controls. Teams that need a hard boundary should enforce required templates (`extends`) and/or protected resources so untrusted PR authors cannot relax credentialed-job safeguards.
 - **Safe parameter passing**: Map Azure Pipelines expressions (such as `$(System.PullRequest.SourceBranch)`) into `AAV_*` environment variables via the step's `env:` block rather than interpolating them directly into shell scripts.
 - **PR validation**: call `aav pr-label` in a dedicated `checkout: none` job before policy evaluation. Give the job identity only the repository permissions needed to read and label pull requests (`Contribute to pull requests`).
+- **Release permission scope**: the `TagRelease` job also needs repository permission to create Git tags (for example, `Create tag`) in addition to PR-labeling permissions.
+- **Pinned archive scope**: this sample pins the Linux x86_64 archive (`launch-ado-automatic-versioner_<version>_Linux_x86_64.tar.gz`). If you run on ARM or Windows agents, use the matching archive name and digest for that platform.
 - **Main pipeline**: run `aav infer-bump` to capture bump intent, export its stdout, then invoke `aav create-tag` (release or RC mode) with that bump.
 
 ```yaml
@@ -90,6 +93,8 @@ stages:
               AAV_SOURCE_BRANCH: $(System.PullRequest.SourceBranch)
 
           # Optional: derive bump from conventional commit PR titles
+          # Requires an aav release that includes --use-pr-title support.
+          # The pinned v1.1.3 archive predates that option.
           # - script: |
           #     set -euo pipefail
           #     "$(Agent.TempDirectory)/aav" pr-label
@@ -100,6 +105,8 @@ stages:
           #     AAV_USE_PR_TITLE: 'true'
           #
           # Optional: PR title preferred, branch prefix fallback on invalid titles
+          # Requires an aav release that includes --allow-branch-name-fallback support.
+          # The pinned v1.1.3 archive predates that option.
           # - script: |
           #     set -euo pipefail
           #     "$(Agent.TempDirectory)/aav" pr-label
