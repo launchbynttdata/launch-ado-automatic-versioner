@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -27,11 +30,12 @@ func NewClient(ctx context.Context, cfg Config) (Client, error) {
 	}
 
 	trimmed := sanitizeConfig(cfg)
-	if err := validateConfig(trimmed); err != nil {
+	canonicalOrgURL, err := validateAndCanonicalizeConfig(trimmed)
+	if err != nil {
 		return nil, err
 	}
 
-	connection := azuredevops.NewPatConnection(trimmed.OrganizationURL, trimmed.Token)
+	connection := azuredevops.NewPatConnection(canonicalOrgURL, trimmed.Token)
 	gitClient, err := git.NewClient(ctx, connection)
 	if err != nil {
 		return nil, fmt.Errorf("creating git client: %w", err)
@@ -272,19 +276,129 @@ func sanitizeConfig(cfg Config) Config {
 	}
 }
 
-func validateConfig(cfg Config) error {
+func validateAndCanonicalizeConfig(cfg Config) (string, error) {
 	switch {
 	case cfg.OrganizationURL == "":
-		return errors.New("ado client: organization url is required")
+		return "", errors.New("ado client: organization url is required")
 	case cfg.Project == "":
-		return errors.New("ado client: project is required")
+		return "", errors.New("ado client: project is required")
 	case cfg.Repository == "":
-		return errors.New("ado client: repository is required")
+		return "", errors.New("ado client: repository is required")
 	case cfg.Token == "":
-		return errors.New("ado client: token is required")
-	default:
-		return nil
+		return "", errors.New("ado client: token is required")
 	}
+
+	return canonicalizeOrganizationURL(cfg.OrganizationURL)
+}
+
+func canonicalizeOrganizationURL(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", errors.New("ado client: organization url is required")
+	}
+	if strings.ContainsAny(trimmed, " \t\r\n\\#") {
+		return "", errors.New("ado client: organization url is malformed or contains fragments")
+	}
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("ado client: invalid organization url: %w", err)
+	}
+	if !strings.EqualFold(parsed.Scheme, "https") {
+		return "", errors.New("ado client: organization url must use https")
+	}
+	if parsed.Opaque != "" {
+		return "", errors.New("ado client: organization url must not be opaque")
+	}
+	if parsed.User != nil {
+		return "", errors.New("ado client: organization url must not contain userinfo")
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery {
+		return "", errors.New("ado client: organization url must not contain query parameters")
+	}
+	if parsed.Fragment != "" {
+		return "", errors.New("ado client: organization url must not contain a fragment")
+	}
+
+	hostname := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(parsed.Hostname()), "."))
+	if !isValidOrganizationHostname(hostname) {
+		return "", errors.New("ado client: organization url has an invalid or disallowed host")
+	}
+
+	port := parsed.Port()
+	if port != "" && port != "443" {
+		return "", errors.New("ado client: organization url must use default https port 443")
+	}
+
+	cleanedPath, err := cleanOrganizationPath(parsed.Path)
+	if err != nil {
+		return "", err
+	}
+
+	canonical := url.URL{
+		Scheme: "https",
+		Host:   hostname,
+		Path:   cleanedPath,
+	}
+	return canonical.String(), nil
+}
+
+func isValidOrganizationHostname(hostname string) bool {
+	if hostname == "" || hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") {
+		return false
+	}
+	if net.ParseIP(hostname) != nil {
+		return false
+	}
+	if !strings.Contains(hostname, ".") {
+		return false
+	}
+	labels := strings.Split(hostname, ".")
+	allDigitsLast := true
+	lastLabel := labels[len(labels)-1]
+	for i := 0; i < len(lastLabel); i++ {
+		if lastLabel[i] < '0' || lastLabel[i] > '9' {
+			allDigitsLast = false
+			break
+		}
+	}
+	if allDigitsLast {
+		return false
+	}
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 {
+			return false
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			ch := label[i]
+			isLowerAlpha := ch >= 'a' && ch <= 'z'
+			isDigit := ch >= '0' && ch <= '9'
+			if !isLowerAlpha && !isDigit && ch != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func cleanOrganizationPath(rawPath string) (string, error) {
+	trimmed := strings.TrimSpace(rawPath)
+	if trimmed == "" || trimmed == "/" {
+		return "", nil
+	}
+	for _, seg := range strings.Split(trimmed, "/") {
+		if seg == "." || seg == ".." {
+			return "", errors.New("ado client: organization url path must not contain relative segments")
+		}
+	}
+	cleaned := path.Clean("/" + strings.TrimPrefix(trimmed, "/"))
+	if cleaned == "/" {
+		return "", nil
+	}
+	return strings.TrimRight(cleaned, "/"), nil
 }
 
 func convertGitRefs(values []git.GitRef) []Ref {
