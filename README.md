@@ -189,6 +189,8 @@ stages:
 
 > **Precedence**: environment variables always win over explicit flags; conflicts are logged in both terse and verbose modes.
 
+> **Breaking change (`--token` removed)**: The `--token <value>` CLI flag was removed so secrets are not exposed in process arguments. Supply the Azure DevOps token through the `AAV_TOKEN` environment variable (recommended in CI) or via standard input using `--token-stdin` (for example, `printf '%s' "$TOKEN" | aav pr-label --token-stdin ...`).
+
 > **Branch prefix env format**: When using the environment variables above, provide comma-separated prefixes with no quotes (e.g. `AAV_BRANCH_MINOR_PREFIXES=feature/,minor/`). Use the repeatable CLI flags when you prefer to specify each prefix individually.
 
 ### PR title conventional commits
