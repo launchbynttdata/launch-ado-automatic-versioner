@@ -1,4 +1,4 @@
-FROM golang:1.27.4 AS builder
+FROM golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d AS builder
 
 ARG BINARY_NAME=aav
 
@@ -8,7 +8,7 @@ COPY . .
 
 RUN go build -o /${BINARY_NAME} ./cmd/aav/
 
-FROM ubuntu:24.04 AS final
+FROM ubuntu:24.04@sha256:2198e4c65076e9cb0b3d695219df667c0e3b0072da64ca3c2648aca17dcecaf5 AS final
 
 ARG BINARY_NAME=aav
 # Install ca-certificates for HTTPS requests

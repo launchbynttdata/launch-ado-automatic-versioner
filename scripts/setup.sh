@@ -31,14 +31,17 @@ echo -e "${YELLOW}Installing Go tools and dependencies...${NC}"
 (cd "$PROJECT_ROOT" && make deps)
 
 # Install pre-commit if not present
+PRE_COMMIT_VERSION="4.5.0"
 if ! command -v pre-commit &> /dev/null; then
-    echo -e "${YELLOW}Installing pre-commit...${NC}"
-    if command -v pip3 &> /dev/null; then
-        pip3 install pre-commit
+    echo -e "${YELLOW}Installing pre-commit==${PRE_COMMIT_VERSION}...${NC}"
+    if command -v mise &> /dev/null; then
+        mise install pre-commit@"${PRE_COMMIT_VERSION}"
+    elif command -v pip3 &> /dev/null; then
+        pip3 install "pre-commit==${PRE_COMMIT_VERSION}"
     elif command -v pip &> /dev/null; then
-        pip install pre-commit
+        pip install "pre-commit==${PRE_COMMIT_VERSION}"
     else
-        echo -e "${YELLOW}Note: pip not found. Please install pre-commit manually.${NC}"
+        echo -e "${YELLOW}Note: mise/pip not found. Please install pre-commit==${PRE_COMMIT_VERSION} manually.${NC}"
         echo -e "${YELLOW}Visit: https://pre-commit.com/#install${NC}"
     fi
 else
