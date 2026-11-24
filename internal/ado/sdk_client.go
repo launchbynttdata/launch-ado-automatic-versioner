@@ -20,10 +20,15 @@ import (
 // When SystemCollectionURI is non-empty (populated by Azure Pipelines via
 // SYSTEM_TEAMFOUNDATIONCOLLECTIONURI), OrganizationURL must match the canonical
 // HTTPS host of SystemCollectionURI, and default Microsoft cloud hosts are not
-// accepted unless they match that host. When SystemCollectionURI is empty
-// (running outside Azure Pipelines), OrganizationURL is restricted to official
-// Microsoft Azure DevOps Services cloud hosts ("dev.azure.com" and
-// "<org>.visualstudio.com").
+// accepted unless they match that host. When SystemCollectionURI is empty,
+// OrganizationURL falls back to official Microsoft Azure DevOps Services cloud
+// hosts ("dev.azure.com" and "<org>.visualstudio.com").
+//
+// Known limitation: SYSTEM_TEAMFOUNDATIONCOLLECTIONURI is an unauthenticated
+// process environment variable. An actor who can modify the child process
+// environment (unset it to fall back to multi-tenant Microsoft cloud hosts, or
+// set it to an attacker-controlled HTTPS host) can bypass this check; it only
+// defends against callers limited to AAV_ORG_URL / --org-url.
 type Config struct {
 	OrganizationURL     string
 	SystemCollectionURI string

@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- Validated and canonicalized `AAV_ORG_URL` / `--org-url` (requiring HTTPS on default port 443 with no userinfo, query, fragment, IP literals, or relative segments) and enforced trusted-host binding: inside Azure Pipelines (`SYSTEM_TEAMFOUNDATIONCOLLECTIONURI` set), the organization host must match `SYSTEM_TEAMFOUNDATIONCOLLECTIONURI` (replacing default cloud hosts); outside Azure Pipelines, only official Microsoft Azure DevOps Services cloud hosts (`dev.azure.com` and `<org>.visualstudio.com`) are accepted.
+- Validated and canonicalized `AAV_ORG_URL` / `--org-url` (requiring HTTPS on default port 443 with no userinfo, query, fragment, IP literals, or relative segments) and enforced trusted-host binding: when `SYSTEM_TEAMFOUNDATIONCOLLECTIONURI` is set, the organization host must match it (replacing default cloud hosts); when unset, only official Microsoft Azure DevOps Services cloud hosts (`dev.azure.com` and `<org>.visualstudio.com`) are accepted (documented as defense-in-depth for `AAV_ORG_URL` / `--org-url` inputs rather than process-environment control).
 - Replaced userinfo-embedded PAT clone URLs in the integration test harness (`integration/cli_test.go`) with credential-free repository URLs and child-process-scoped `GIT_CONFIG_*` `http.extraHeader` authentication so secrets are never written to `.git/config` or child-process `argv`.
 
 ## [1.1.0] - 2025-12-16
