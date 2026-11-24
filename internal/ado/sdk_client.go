@@ -16,8 +16,15 @@ import (
 )
 
 // Config controls how the Azure DevOps client connects to the Git API.
+//
+// When AllowedHosts is empty, OrganizationURL is restricted to official
+// Microsoft Azure DevOps Services cloud hosts ("dev.azure.com" and
+// "<org>.visualstudio.com"). When AllowedHosts is non-empty, the default
+// Microsoft cloud hosts are replaced and OrganizationURL must match one of the
+// configured exact hostnames.
 type Config struct {
 	OrganizationURL string
+	AllowedHosts    []string
 	Project         string
 	Repository      string
 	Token           string
@@ -268,8 +275,16 @@ func (c *sdkClient) CreateAnnotatedTag(ctx context.Context, spec TagSpec) error 
 }
 
 func sanitizeConfig(cfg Config) Config {
+	allowed := make([]string, 0, len(cfg.AllowedHosts))
+	for _, host := range cfg.AllowedHosts {
+		trimmed := strings.TrimSpace(host)
+		if trimmed != "" {
+			allowed = append(allowed, trimmed)
+		}
+	}
 	return Config{
 		OrganizationURL: strings.TrimSpace(cfg.OrganizationURL),
+		AllowedHosts:    allowed,
 		Project:         strings.TrimSpace(cfg.Project),
 		Repository:      strings.TrimSpace(cfg.Repository),
 		Token:           strings.TrimSpace(cfg.Token),
@@ -288,10 +303,15 @@ func validateAndCanonicalizeConfig(cfg Config) (string, error) {
 		return "", errors.New("ado client: token is required")
 	}
 
-	return canonicalizeOrganizationURL(cfg.OrganizationURL)
+	return canonicalizeOrganizationURL(cfg.OrganizationURL, cfg.AllowedHosts)
 }
 
-func canonicalizeOrganizationURL(raw string) (string, error) {
+func canonicalizeOrganizationURL(raw string, allowedHosts []string) (string, error) {
+	customHosts, err := normalizeAllowedHosts(allowedHosts)
+	if err != nil {
+		return "", err
+	}
+
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return "", errors.New("ado client: organization url is required")
@@ -320,9 +340,12 @@ func canonicalizeOrganizationURL(raw string) (string, error) {
 		return "", errors.New("ado client: organization url must not contain a fragment")
 	}
 
-	hostname := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(parsed.Hostname()), "."))
+	hostname := normalizeHostname(parsed.Hostname())
 	if !isValidOrganizationHostname(hostname) {
 		return "", errors.New("ado client: organization url has an invalid or disallowed host")
+	}
+	if !isTrustedOrganizationHost(hostname, customHosts) {
+		return "", fmt.Errorf("ado client: organization host %q is not in the trusted host allowlist", hostname)
 	}
 
 	port := parsed.Port()
@@ -341,6 +364,56 @@ func canonicalizeOrganizationURL(raw string) (string, error) {
 		Path:   cleanedPath,
 	}
 	return canonical.String(), nil
+}
+
+func normalizeHostname(raw string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
+}
+
+func normalizeAllowedHosts(rawHosts []string) (map[string]struct{}, error) {
+	if len(rawHosts) == 0 {
+		return nil, nil
+	}
+	normalized := make(map[string]struct{}, len(rawHosts))
+	for _, raw := range rawHosts {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		if strings.ContainsAny(trimmed, ":/\\?*@# \t\r\n") {
+			return nil, fmt.Errorf("ado client: invalid allowed organization host %q: must be an exact hostname without scheme, port, path, or wildcards", raw)
+		}
+		host := normalizeHostname(trimmed)
+		if !isValidOrganizationHostname(host) {
+			return nil, fmt.Errorf("ado client: invalid allowed organization host %q", raw)
+		}
+		normalized[host] = struct{}{}
+	}
+	if len(normalized) == 0 {
+		return nil, nil
+	}
+	return normalized, nil
+}
+
+func isTrustedOrganizationHost(hostname string, customHosts map[string]struct{}) bool {
+	if len(customHosts) > 0 {
+		_, ok := customHosts[hostname]
+		return ok
+	}
+	return isDefaultMicrosoftCloudHost(hostname)
+}
+
+func isDefaultMicrosoftCloudHost(hostname string) bool {
+	if hostname == "dev.azure.com" {
+		return true
+	}
+	// Official legacy Azure DevOps Services domain: https://<org>.visualstudio.com
+	// Restrict to single-label organization subdomains (3 labels total).
+	if strings.HasSuffix(hostname, ".visualstudio.com") {
+		orgLabel := strings.TrimSuffix(hostname, ".visualstudio.com")
+		return orgLabel != "" && !strings.Contains(orgLabel, ".")
+	}
+	return false
 }
 
 func isValidOrganizationHostname(hostname string) bool {

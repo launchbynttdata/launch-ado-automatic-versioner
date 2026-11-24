@@ -1,6 +1,11 @@
 package ado
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/microsoft/azure-devops-go-api/azuredevops/v7/git"
@@ -176,10 +181,11 @@ func TestCanonicalizeOrganizationURL(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		input   string
-		want    string
-		wantErr bool
+		name         string
+		input        string
+		allowedHosts []string
+		want         string
+		wantErr      bool
 	}{
 		{
 			name:  "azure devops services canonical url",
@@ -202,9 +208,84 @@ func TestCanonicalizeOrganizationURL(t *testing.T) {
 			want:  "https://my-org.visualstudio.com",
 		},
 		{
-			name:  "azure devops server collection path",
-			input: "https://ado.corp.example.com/tfs/DefaultCollection/",
-			want:  "https://ado.corp.example.com/tfs/DefaultCollection",
+			name:         "rejects custom host when custom allowlist is not configured",
+			input:        "https://ado.corp.example.com/tfs/DefaultCollection/",
+			allowedHosts: nil,
+			wantErr:      true,
+		},
+		{
+			name:         "accepts custom host when explicitly allowlisted",
+			input:        "https://ado.corp.example.com/tfs/DefaultCollection/",
+			allowedHosts: []string{"ado.corp.example.com"},
+			want:         "https://ado.corp.example.com/tfs/DefaultCollection",
+		},
+		{
+			name:         "custom allowlist normalizes case and trailing dot",
+			input:        "https://ado.corp.example.com/tfs/DefaultCollection",
+			allowedHosts: []string{" ADO.CORP.EXAMPLE.COM. "},
+			want:         "https://ado.corp.example.com/tfs/DefaultCollection",
+		},
+		{
+			name:         "custom allowlist removes default dev.azure.com host",
+			input:        "https://dev.azure.com/my-org",
+			allowedHosts: []string{"ado.corp.example.com"},
+			wantErr:      true,
+		},
+		{
+			name:         "custom allowlist removes default visualstudio.com host",
+			input:        "https://my-org.visualstudio.com",
+			allowedHosts: []string{"ado.corp.example.com"},
+			wantErr:      true,
+		},
+		{
+			name:         "custom allowlist rejects unlisted custom host",
+			input:        "https://other.corp.example.com/tfs/DefaultCollection",
+			allowedHosts: []string{"ado.corp.example.com"},
+			wantErr:      true,
+		},
+		{
+			name:    "rejects bare visualstudio.com without org subdomain",
+			input:   "https://visualstudio.com/my-org",
+			wantErr: true,
+		},
+		{
+			name:    "rejects nested visualstudio.com subdomain",
+			input:   "https://sub.my-org.visualstudio.com/",
+			wantErr: true,
+		},
+		{
+			name:    "rejects lookalike suffix domain",
+			input:   "https://evildev.azure.com/my-org",
+			wantErr: true,
+		},
+		{
+			name:    "rejects subdomain of dev.azure.com",
+			input:   "https://sub.dev.azure.com/my-org",
+			wantErr: true,
+		},
+		{
+			name:         "rejects wildcard in custom allowlist",
+			input:        "https://ado.corp.example.com/tfs/DefaultCollection",
+			allowedHosts: []string{"*.corp.example.com"},
+			wantErr:      true,
+		},
+		{
+			name:         "rejects scheme or path in custom allowlist entry",
+			input:        "https://ado.corp.example.com/tfs/DefaultCollection",
+			allowedHosts: []string{"https://ado.corp.example.com"},
+			wantErr:      true,
+		},
+		{
+			name:         "rejects port in custom allowlist entry",
+			input:        "https://ado.corp.example.com/tfs/DefaultCollection",
+			allowedHosts: []string{"ado.corp.example.com:8443"},
+			wantErr:      true,
+		},
+		{
+			name:         "rejects ip literal in custom allowlist entry",
+			input:        "https://ado.corp.example.com/tfs/DefaultCollection",
+			allowedHosts: []string{"10.0.0.5"},
+			wantErr:      true,
 		},
 		{
 			name:    "rejects empty url",
@@ -282,19 +363,70 @@ func TestCanonicalizeOrganizationURL(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := canonicalizeOrganizationURL(tc.input)
+			got, err := canonicalizeOrganizationURL(tc.input, tc.allowedHosts)
 			if tc.wantErr {
 				if err == nil {
-					t.Fatalf("expected error for %q, got %q", tc.input, got)
+					t.Fatalf("expected error for %q (allowedHosts=%v), got %q", tc.input, tc.allowedHosts, got)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("unexpected error for %q: %v", tc.input, err)
+				t.Fatalf("unexpected error for %q (allowedHosts=%v): %v", tc.input, tc.allowedHosts, err)
 			}
 			if got != tc.want {
 				t.Fatalf("got %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestNewClientRejectsUntrustedHostBeforeNetworkIO(t *testing.T) {
+	t.Parallel()
+
+	var hitCount atomic.Int32
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hitCount.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	_, err := NewClient(context.Background(), Config{
+		OrganizationURL: "https://evil.example.com/my-org",
+		Project:         "proj",
+		Repository:      "repo",
+		Token:           "secret-pat-canary",
+	})
+	if err == nil {
+		t.Fatal("expected NewClient to reject untrusted organization host, got nil")
+	}
+	if !strings.Contains(err.Error(), "not in the trusted host allowlist") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	_, err = NewClient(context.Background(), Config{
+		OrganizationURL: "https://dev.azure.com/my-org",
+		AllowedHosts:    []string{"ado.corp.example.com"},
+		Project:         "proj",
+		Repository:      "repo",
+		Token:           "secret-pat-canary",
+	})
+	if err == nil {
+		t.Fatal("expected NewClient to reject dev.azure.com when custom AllowedHosts is set, got nil")
+	}
+	if !strings.Contains(err.Error(), "not in the trusted host allowlist") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	_, err = NewClient(context.Background(), Config{
+		OrganizationURL: srv.URL,
+		Project:         "proj",
+		Repository:      "repo",
+		Token:           "secret-pat-canary",
+	})
+	if err == nil {
+		t.Fatal("expected NewClient to reject httptest IP/port URL, got nil")
+	}
+	if hitCount.Load() != 0 {
+		t.Fatalf("expected 0 outbound HTTP requests, got %d", hitCount.Load())
 	}
 }

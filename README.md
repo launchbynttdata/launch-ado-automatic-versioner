@@ -160,7 +160,8 @@ stages:
 
 | Purpose | Environment Variable | Flag | Default | Notes |
 | --- | --- | --- | --- | --- |
-| Org URL | `AAV_ORG_URL` | `--org-url` | _required_ | Absolute `https://` URL on default port 443 with a qualified hostname and no userinfo, query, or fragment (e.g. `https://dev.azure.com/{org}`, `https://{org}.visualstudio.com`, or `https://ado.example.com/tfs/{collection}`) |
+| Org URL | `AAV_ORG_URL` | `--org-url` | _required_ | Absolute `https://` URL on default port 443 with a trusted hostname and no userinfo, query, or fragment (e.g. `https://dev.azure.com/{org}`, `https://{org}.visualstudio.com`, or `https://ado.example.com/tfs/{collection}` when allowlisted) |
+| Allowed org hosts | `AAV_ALLOWED_ORG_HOSTS` | `--allowed-org-host` | `dev.azure.com, *.visualstudio.com` | Exact custom/on-prem hostnames (repeatable flag or comma-separated env); setting any custom host removes the default Microsoft cloud hosts from the allowlist |
 | Project | `AAV_PROJECT` | `--project` | _required_ | ADO project name |
 | Repository | `AAV_REPO` | `--repo` | _required_ | Git repo name |
 | Token | `AAV_TOKEN` | `--token-stdin` | _required_ | PAT or `System.AccessToken` (via env or stdin; never pass secrets in CLI args) |
@@ -190,6 +191,8 @@ stages:
 > **Precedence**: environment variables always win over explicit flags; conflicts are logged in both terse and verbose modes.
 
 > **Breaking change (`--token` removed)**: The `--token <value>` CLI flag was removed so secrets are not exposed in process arguments. Supply the Azure DevOps token through the `AAV_TOKEN` environment variable (recommended in CI) or via standard input using `--token-stdin` (for example, `printf '%s' "$TOKEN" | aav pr-label --token-stdin ...`).
+
+> **Trusted organization hosts (`AAV_ALLOWED_ORG_HOSTS` / `--allowed-org-host`)**: By default, `aav` only sends credentials to official Microsoft Azure DevOps Services cloud hosts (`dev.azure.com` and `<org>.visualstudio.com`). For Azure DevOps Server / on-premises deployments, configure exact trusted hostnames via `AAV_ALLOWED_ORG_HOSTS` (comma-separated, protected in pipeline configuration) or `--allowed-org-host` (repeatable). Defining any custom host replaces the default allowlist, so `dev.azure.com` and `*.visualstudio.com` are rejected unless explicitly listed. Keep `AAV_ORG_URL` and `AAV_ALLOWED_ORG_HOSTS` in protected pipeline configuration so untrusted callers cannot redirect tokens.
 
 > **Branch prefix env format**: When using the environment variables above, provide comma-separated prefixes with no quotes (e.g. `AAV_BRANCH_MINOR_PREFIXES=feature/,minor/`). Use the repeatable CLI flags when you prefer to specify each prefix individually.
 

@@ -27,15 +27,16 @@ import (
 )
 
 const (
-	envOrgURL     = "AAV_ORG_URL"
-	envProject    = "AAV_PROJECT"
-	envRepo       = "AAV_REPO"
-	envToken      = "AAV_TOKEN"
-	envLogLevel   = "AAV_LOG_LEVEL"
-	envLabelPref  = "AAV_LABEL_PREFIX"
-	envLabelMajor = "AAV_LABEL_MAJOR"
-	envLabelMinor = "AAV_LABEL_MINOR"
-	envLabelPatch = "AAV_LABEL_PATCH"
+	envOrgURL          = "AAV_ORG_URL"
+	envAllowedOrgHosts = "AAV_ALLOWED_ORG_HOSTS"
+	envProject         = "AAV_PROJECT"
+	envRepo            = "AAV_REPO"
+	envToken           = "AAV_TOKEN"
+	envLogLevel        = "AAV_LOG_LEVEL"
+	envLabelPref       = "AAV_LABEL_PREFIX"
+	envLabelMajor      = "AAV_LABEL_MAJOR"
+	envLabelMinor      = "AAV_LABEL_MINOR"
+	envLabelPatch      = "AAV_LABEL_PATCH"
 
 	envBranchMajor = "AAV_BRANCH_MAJOR_PREFIXES"
 	envBranchMinor = "AAV_BRANCH_MINOR_PREFIXES"
@@ -82,18 +83,19 @@ func Execute(ctx context.Context) error {
 }
 
 type rootFlagSet struct {
-	orgURL      *stringFlag
-	project     *stringFlag
-	repo        *stringFlag
-	tokenStdin  *boolFlag
-	logLevel    *stringFlag
-	labelPref   *stringFlag
-	labelMajor  *stringFlag
-	labelMinor  *stringFlag
-	labelPatch  *stringFlag
-	branchMaj   *stringSliceFlag
-	branchMin   *stringSliceFlag
-	branchPatch *stringSliceFlag
+	orgURL       *stringFlag
+	allowedHosts *stringSliceFlag
+	project      *stringFlag
+	repo         *stringFlag
+	tokenStdin   *boolFlag
+	logLevel     *stringFlag
+	labelPref    *stringFlag
+	labelMajor   *stringFlag
+	labelMinor   *stringFlag
+	labelPatch   *stringFlag
+	branchMaj    *stringSliceFlag
+	branchMin    *stringSliceFlag
+	branchPatch  *stringSliceFlag
 }
 
 type tagFlagSet struct {
@@ -158,18 +160,19 @@ func bindRootFlags(cmd *cobra.Command) *rootFlagSet {
 	defaults := branchmap.DefaultMapping()
 	fs := cmd.PersistentFlags()
 	return &rootFlagSet{
-		orgURL:      bindStringFlag(fs, "org-url", "org-url", "", envOrgURL, "", "Azure DevOps organization URL"),
-		project:     bindStringFlag(fs, "project", "project", "", envProject, "", "Azure DevOps project name"),
-		repo:        bindStringFlag(fs, "repo", "repo", "", envRepo, "", "Azure DevOps repository name"),
-		tokenStdin:  bindBoolFlag(fs, "token-stdin", "token-stdin", "", "", false, "Read Azure DevOps token from standard input"),
-		logLevel:    bindStringFlag(fs, "log-level", "log-level", "", envLogLevel, logging.LevelTerse, "Log verbosity (terse or verbose)"),
-		labelPref:   bindStringFlag(fs, "label-prefix", "label-prefix", "", envLabelPref, "semver-", "Optional prefix for semver labels"),
-		labelMajor:  bindStringFlag(fs, "label-major", "label-major", "", envLabelMajor, "", "Override label name for major bumps"),
-		labelMinor:  bindStringFlag(fs, "label-minor", "label-minor", "", envLabelMinor, "", "Override label name for minor bumps"),
-		labelPatch:  bindStringFlag(fs, "label-patch", "label-patch", "", envLabelPatch, "", "Override label name for patch bumps"),
-		branchMaj:   bindStringSliceFlag(fs, "branch-major-prefixes", "branch-major-prefix", "", envBranchMajor, defaults.MajorPrefixes, "Branch prefixes that imply a major bump"),
-		branchMin:   bindStringSliceFlag(fs, "branch-minor-prefixes", "branch-minor-prefix", "", envBranchMinor, defaults.MinorPrefixes, "Branch prefixes that imply a minor bump"),
-		branchPatch: bindStringSliceFlag(fs, "branch-patch-prefixes", "branch-patch-prefix", "", envBranchPatch, defaults.PatchPrefixes, "Branch prefixes that imply a patch bump"),
+		orgURL:       bindStringFlag(fs, "org-url", "org-url", "", envOrgURL, "", "Azure DevOps organization URL"),
+		allowedHosts: bindStringSliceFlag(fs, "allowed-org-hosts", "allowed-org-host", "", envAllowedOrgHosts, nil, "Trusted custom Azure DevOps hostnames (replaces default dev.azure.com and *.visualstudio.com allowlist)"),
+		project:      bindStringFlag(fs, "project", "project", "", envProject, "", "Azure DevOps project name"),
+		repo:         bindStringFlag(fs, "repo", "repo", "", envRepo, "", "Azure DevOps repository name"),
+		tokenStdin:   bindBoolFlag(fs, "token-stdin", "token-stdin", "", "", false, "Read Azure DevOps token from standard input"),
+		logLevel:     bindStringFlag(fs, "log-level", "log-level", "", envLogLevel, logging.LevelTerse, "Log verbosity (terse or verbose)"),
+		labelPref:    bindStringFlag(fs, "label-prefix", "label-prefix", "", envLabelPref, "semver-", "Optional prefix for semver labels"),
+		labelMajor:   bindStringFlag(fs, "label-major", "label-major", "", envLabelMajor, "", "Override label name for major bumps"),
+		labelMinor:   bindStringFlag(fs, "label-minor", "label-minor", "", envLabelMinor, "", "Override label name for minor bumps"),
+		labelPatch:   bindStringFlag(fs, "label-patch", "label-patch", "", envLabelPatch, "", "Override label name for patch bumps"),
+		branchMaj:    bindStringSliceFlag(fs, "branch-major-prefixes", "branch-major-prefix", "", envBranchMajor, defaults.MajorPrefixes, "Branch prefixes that imply a major bump"),
+		branchMin:    bindStringSliceFlag(fs, "branch-minor-prefixes", "branch-minor-prefix", "", envBranchMinor, defaults.MinorPrefixes, "Branch prefixes that imply a minor bump"),
+		branchPatch:  bindStringSliceFlag(fs, "branch-patch-prefixes", "branch-patch-prefix", "", envBranchPatch, defaults.PatchPrefixes, "Branch prefixes that imply a patch bump"),
 	}
 }
 
@@ -590,8 +593,14 @@ func buildRuntime(ctx context.Context, stdin io.Reader, flags *rootFlagSet) (run
 		PatchPrefixes: flags.branchPatch.Value(resolver),
 	})
 
+	var allowedHosts []string
+	if flags.allowedHosts != nil {
+		allowedHosts = flags.allowedHosts.Value(resolver)
+	}
+
 	client, err := ado.NewClient(ctx, ado.Config{
 		OrganizationURL: orgURL,
+		AllowedHosts:    allowedHosts,
 		Project:         project,
 		Repository:      repo,
 		Token:           token,

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `AAV_ALLOWED_ORG_HOSTS` / `--allowed-org-host` to configure exact custom/on-prem Azure DevOps hostnames; defining any custom host replaces the default Microsoft cloud allowlist (`dev.azure.com` and `<org>.visualstudio.com`).
 - `--token-stdin` flag to read the Azure DevOps token from standard input (up to 64 KiB, trimmed) alongside `AAV_TOKEN`, with `AAV_TOKEN` taking precedence and redacted conflict logging.
 - `pr-label --use-pr-title` to derive bump intent from conventional commit PR titles (parsed via `github.com/leodido/go-conventionalcommits`).
 - `pr-label --allow-branch-name-fallback` to fall back to branch-prefix bump mapping when the PR title is not a valid conventional commit.
@@ -22,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Validated and canonicalized `AAV_ORG_URL` / `--org-url` (requiring HTTPS on default port 443 with no userinfo, query, fragment, IP literals, or relative segments) and enforced a trusted-host allowlist defaulting to official Microsoft Azure DevOps Services cloud hosts (`dev.azure.com` and `<org>.visualstudio.com`) before constructing authenticated SDK connections.
 - Replaced userinfo-embedded PAT clone URLs in the integration test harness (`integration/cli_test.go`) with credential-free repository URLs and child-process-scoped `GIT_CONFIG_*` `http.extraHeader` authentication so secrets are never written to `.git/config` or child-process `argv`.
 
 ## [1.1.0] - 2025-12-16

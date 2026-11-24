@@ -26,8 +26,9 @@ import (
 )
 
 const (
-	envOrgURL         = "AAV_ORG_URL"
-	envProject        = "AAV_PROJECT"
+	envOrgURL          = "AAV_ORG_URL"
+	envAllowedOrgHosts = "AAV_ALLOWED_ORG_HOSTS"
+	envProject         = "AAV_PROJECT"
 	envRepo           = "AAV_REPO"
 	envToken          = "AAV_TOKEN"
 	envExpectedBump   = "AAV_EXPECTED_BUMP"
@@ -162,8 +163,9 @@ func runReleaseAndRcScenario(t *testing.T, cfg envConfig) {
 }
 
 type envConfig struct {
-	OrgURL         string
-	Project        string
+	OrgURL          string
+	AllowedOrgHosts string
+	Project         string
 	Repo           string
 	Token          string
 	ExpectedBump   string
@@ -187,8 +189,9 @@ func loadConfig(t *testing.T) envConfig {
 		t.Fatalf("invalid expected bump %q; must be major, minor, or patch", expected)
 	}
 	return envConfig{
-		OrgURL:         requireEnv(t, envOrgURL),
-		Project:        requireEnv(t, envProject),
+		OrgURL:          requireEnv(t, envOrgURL),
+		AllowedOrgHosts: optionalEnv(envAllowedOrgHosts, ""),
+		Project:         requireEnv(t, envProject),
 		Repo:           requireEnv(t, envRepo),
 		Token:          requireEnv(t, envToken),
 		ExpectedBump:   expected,
@@ -441,6 +444,9 @@ func (h *workflowHarness) baseCLIEnv() map[string]string {
 		envRepo:     h.cfg.Repo,
 		envToken:    h.cfg.Token,
 		envLogLevel: "verbose",
+	}
+	if h.cfg.AllowedOrgHosts != "" {
+		envMap[envAllowedOrgHosts] = h.cfg.AllowedOrgHosts
 	}
 	if h.cfg.TagPrefix != "" {
 		envMap[envTagPrefix] = h.cfg.TagPrefix

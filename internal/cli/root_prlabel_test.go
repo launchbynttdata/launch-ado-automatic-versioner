@@ -169,3 +169,80 @@ func TestResolveToken(t *testing.T) {
 		}
 	})
 }
+
+func TestRootCommandOrganizationHostAllowlist(t *testing.T) {
+	t.Run("rejects untrusted host by default", func(t *testing.T) {
+		t.Setenv(envOrgURL, "https://evil.example.com/my-org")
+		t.Setenv(envProject, "proj")
+		t.Setenv(envRepo, "repo")
+		t.Setenv(envToken, "secret-canary")
+		t.Setenv(envAllowedOrgHosts, "")
+		_ = os.Unsetenv(envAllowedOrgHosts)
+
+		cmd := newRootCommand()
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		cmd.SetArgs([]string{"pr-label", "--pr-id", "1", "--source-branch", "feature/test"})
+
+		err := cmd.Execute()
+		if err == nil {
+			t.Fatal("expected error for untrusted host, got nil")
+		}
+		if !strings.Contains(err.Error(), "not in the trusted host allowlist") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("custom --allowed-org-host removes default microsoft cloud hosts", func(t *testing.T) {
+		t.Setenv(envOrgURL, "https://dev.azure.com/my-org")
+		t.Setenv(envProject, "proj")
+		t.Setenv(envRepo, "repo")
+		t.Setenv(envToken, "secret-canary")
+		t.Setenv(envAllowedOrgHosts, "")
+		_ = os.Unsetenv(envAllowedOrgHosts)
+
+		cmd := newRootCommand()
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		cmd.SetArgs([]string{
+			"pr-label",
+			"--allowed-org-host", "ado.corp.example.com",
+			"--pr-id", "1",
+			"--source-branch", "feature/test",
+		})
+
+		err := cmd.Execute()
+		if err == nil {
+			t.Fatal("expected dev.azure.com to be rejected when custom allowed host is configured, got nil")
+		}
+		if !strings.Contains(err.Error(), "not in the trusted host allowlist") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("AAV_ALLOWED_ORG_HOSTS overrides --allowed-org-host", func(t *testing.T) {
+		t.Setenv(envOrgURL, "https://my-org.visualstudio.com")
+		t.Setenv(envAllowedOrgHosts, "ado1.corp.example.com, ado2.corp.example.com")
+		t.Setenv(envProject, "proj")
+		t.Setenv(envRepo, "repo")
+		t.Setenv(envToken, "secret-canary")
+
+		cmd := newRootCommand()
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		cmd.SetArgs([]string{
+			"pr-label",
+			"--allowed-org-host", "my-org.visualstudio.com",
+			"--pr-id", "1",
+			"--source-branch", "feature/test",
+		})
+
+		err := cmd.Execute()
+		if err == nil {
+			t.Fatal("expected env allowlist to override CLI flag and reject my-org.visualstudio.com, got nil")
+		}
+		if !strings.Contains(err.Error(), "not in the trusted host allowlist") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
