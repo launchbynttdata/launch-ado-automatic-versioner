@@ -173,7 +173,7 @@ If env and CLI differ:
 
 #### ADO Connection
 
-- `AAV_ORG_URL` / `--org-url` (must match `SYSTEM_TEAMFOUNDATIONCOLLECTIONURI` host when set in Azure Pipelines, or `dev.azure.com` / `<org>.visualstudio.com` outside Pipelines)
+- `AAV_ORG_URL` / `--org-url` (must match the same Azure DevOps Services `<org>` across `dev.azure.com/<org>` and `<org>.visualstudio.com` or exact custom host of `SYSTEM_TEAMFOUNDATIONCOLLECTIONURI` when set in Azure Pipelines, or `dev.azure.com/<org>` / `<org>.visualstudio.com` outside Pipelines)
 - `AAV_PROJECT` / `--project`
 - `AAV_REPO` / `--repo`
 - `AAV_TOKEN` / `--token-stdin`

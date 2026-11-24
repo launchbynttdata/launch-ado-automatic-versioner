@@ -243,6 +243,47 @@ func TestCanonicalizeOrganizationURL(t *testing.T) {
 			wantErr:             true,
 		},
 		{
+			name:                "accepts dev.azure.com org when system collection uri uses legacy visualstudio.com for same org",
+			input:               "https://dev.azure.com/My-Org",
+			systemCollectionURI: "https://my-org.visualstudio.com/",
+			want:                "https://dev.azure.com/My-Org",
+		},
+		{
+			name:                "accepts legacy visualstudio.com org when system collection uri uses dev.azure.com for same org",
+			input:               "https://my-org.visualstudio.com/",
+			systemCollectionURI: "https://dev.azure.com/My-Org/",
+			want:                "https://my-org.visualstudio.com",
+		},
+		{
+			name:                "rejects different dev.azure.com org when system collection uri uses dev.azure.com",
+			input:               "https://dev.azure.com/other-org",
+			systemCollectionURI: "https://dev.azure.com/my-org/",
+			wantErr:             true,
+		},
+		{
+			name:                "rejects different dev.azure.com org when system collection uri uses legacy visualstudio.com",
+			input:               "https://dev.azure.com/other-org",
+			systemCollectionURI: "https://my-org.visualstudio.com/",
+			wantErr:             true,
+		},
+		{
+			name:                "rejects different legacy visualstudio.com org when system collection uri uses dev.azure.com",
+			input:               "https://other-org.visualstudio.com",
+			systemCollectionURI: "https://dev.azure.com/my-org/",
+			wantErr:             true,
+		},
+		{
+			name:    "rejects bare dev.azure.com without organization path segment",
+			input:   "https://dev.azure.com/",
+			wantErr: true,
+		},
+		{
+			name:                "rejects bare dev.azure.com in system collection uri",
+			input:               "https://dev.azure.com/my-org",
+			systemCollectionURI: "https://dev.azure.com/",
+			wantErr:             true,
+		},
+		{
 			name:                "system collection uri rejects mismatched custom host",
 			input:               "https://evil.example.com/tfs/DefaultCollection",
 			systemCollectionURI: "https://ado.corp.example.com/tfs/DefaultCollection/",
