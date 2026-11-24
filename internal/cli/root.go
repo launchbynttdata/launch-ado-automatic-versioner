@@ -85,7 +85,7 @@ type rootFlagSet struct {
 	orgURL      *stringFlag
 	project     *stringFlag
 	repo        *stringFlag
-	token       *stringFlag
+	tokenStdin  *boolFlag
 	logLevel    *stringFlag
 	labelPref   *stringFlag
 	labelMajor  *stringFlag
@@ -161,7 +161,7 @@ func bindRootFlags(cmd *cobra.Command) *rootFlagSet {
 		orgURL:      bindStringFlag(fs, "org-url", "org-url", "", envOrgURL, "", "Azure DevOps organization URL"),
 		project:     bindStringFlag(fs, "project", "project", "", envProject, "", "Azure DevOps project name"),
 		repo:        bindStringFlag(fs, "repo", "repo", "", envRepo, "", "Azure DevOps repository name"),
-		token:       bindSecretFlag(fs, "token", "token", "", envToken, "", "Azure DevOps personal access token or System.AccessToken"),
+		tokenStdin:  bindBoolFlag(fs, "token-stdin", "token-stdin", "", "", false, "Read Azure DevOps token from standard input"),
 		logLevel:    bindStringFlag(fs, "log-level", "log-level", "", envLogLevel, logging.LevelTerse, "Log verbosity (terse or verbose)"),
 		labelPref:   bindStringFlag(fs, "label-prefix", "label-prefix", "", envLabelPref, "semver-", "Optional prefix for semver labels"),
 		labelMajor:  bindStringFlag(fs, "label-major", "label-major", "", envLabelMajor, "", "Override label name for major bumps"),
@@ -184,7 +184,7 @@ func newPRLabelCommand(rootFlags *rootFlagSet) *cobra.Command {
 		Short: "Ensure the expected semver label exists on a pull request",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			runtime, cleanup, err := buildRuntime(ctx, rootFlags)
+			runtime, cleanup, err := buildRuntime(ctx, cmd.InOrStdin(), rootFlags)
 			if err != nil {
 				return err
 			}
@@ -331,7 +331,7 @@ func newInferCommand(rootFlags *rootFlagSet) *cobra.Command {
 		Short: "Infer bump intent from the merge commit's pull request labels",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			runtime, cleanup, err := buildRuntime(ctx, rootFlags)
+			runtime, cleanup, err := buildRuntime(ctx, cmd.InOrStdin(), rootFlags)
 			if err != nil {
 				return err
 			}
@@ -396,7 +396,7 @@ func newTagCommand(rootFlags *rootFlagSet) *cobra.Command {
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		ctx := cmd.Context()
-		runtime, cleanup, err := buildRuntime(ctx, rootFlags)
+		runtime, cleanup, err := buildRuntime(ctx, cmd.InOrStdin(), rootFlags)
 		if err != nil {
 			return err
 		}
@@ -542,7 +542,7 @@ func (f *tagFlagSet) resolve(resolver config.Resolver) (tagging.CreateConfig, er
 	}, nil
 }
 
-func buildRuntime(ctx context.Context, flags *rootFlagSet) (runtimeConfig, func(), error) {
+func buildRuntime(ctx context.Context, stdin io.Reader, flags *rootFlagSet) (runtimeConfig, func(), error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -572,9 +572,9 @@ func buildRuntime(ctx context.Context, flags *rootFlagSet) (runtimeConfig, func(
 		return runtimeConfig{}, nil, fmt.Errorf("repo is required (set %s or --repo)", envRepo)
 	}
 
-	token := strings.TrimSpace(flags.token.Value(resolver))
-	if token == "" {
-		return runtimeConfig{}, nil, fmt.Errorf("token is required (set %s or --token)", envToken)
+	token, err := resolveToken(resolver, stdin, flags.tokenStdin)
+	if err != nil {
+		return runtimeConfig{}, nil, err
 	}
 
 	labelResolver := labels.NewResolver(labels.Config{
@@ -611,6 +611,34 @@ func buildRuntime(ctx context.Context, flags *rootFlagSet) (runtimeConfig, func(
 		branches: branchResolver,
 		labels:   labelResolver,
 	}, cleanup, nil
+}
+
+func resolveToken(resolver config.Resolver, stdin io.Reader, tokenStdinFlag *boolFlag) (string, error) {
+	var stdinVal string
+	var stdinSet bool
+	if tokenStdinFlag != nil {
+		useStdin, err := tokenStdinFlag.Value(resolver)
+		if err != nil {
+			return "", err
+		}
+		if useStdin {
+			if stdin == nil {
+				return "", fmt.Errorf("reading token from stdin: stdin is nil")
+			}
+			raw, err := io.ReadAll(io.LimitReader(stdin, 64*1024))
+			if err != nil {
+				return "", fmt.Errorf("reading token from stdin: %w", err)
+			}
+			stdinVal = strings.TrimSpace(string(raw))
+			stdinSet = true
+		}
+	}
+
+	token := strings.TrimSpace(resolver.Secret("token", envToken, stdinVal, stdinSet, ""))
+	if token == "" {
+		return "", fmt.Errorf("token is required (set %s or --token-stdin)", envToken)
+	}
+	return token, nil
 }
 
 func parseTagMode(value string) (tagplan.Mode, error) {
