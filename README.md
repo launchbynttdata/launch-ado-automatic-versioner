@@ -163,7 +163,7 @@ stages:
 | Org URL | `AAV_ORG_URL` | `--org-url` | _required_ | `https://dev.azure.com/{org}` |
 | Project | `AAV_PROJECT` | `--project` | _required_ | ADO project name |
 | Repository | `AAV_REPO` | `--repo` | _required_ | Git repo name |
-| Token | `AAV_TOKEN` | `--token` | _required_ | PAT or `System.AccessToken` |
+| Token | `AAV_TOKEN` | `--token-stdin` | _required_ | PAT or `System.AccessToken` (via env or stdin; never pass secrets in CLI args) |
 | Log level | `AAV_LOG_LEVEL` | `--log-level` | `terse` | `verbose` prints config + trace |
 | Label prefix | `AAV_LABEL_PREFIX` | `--label-prefix` | `semver-` | Empty string allowed |
 | Major label | `AAV_LABEL_MAJOR` | `--label-major` | derived | Overrides prefix value |
@@ -188,6 +188,8 @@ stages:
 | Floating tags | `AAV_USE_FLOATING_TAGS` | `--use-floating-tags` | `false` | Maintain short `v<major>` refs that track the latest release major; detected automatically when such refs already exist |
 
 > **Precedence**: environment variables always win over explicit flags; conflicts are logged in both terse and verbose modes.
+
+> **Breaking change (`--token` removed)**: The `--token <value>` CLI flag was removed so secrets are not exposed in process arguments. Supply the Azure DevOps token through the `AAV_TOKEN` environment variable (recommended in CI) or via standard input using `--token-stdin` (for example, `printf '%s' "$TOKEN" | aav pr-label --token-stdin ...`).
 
 > **Branch prefix env format**: When using the environment variables above, provide comma-separated prefixes with no quotes (e.g. `AAV_BRANCH_MINOR_PREFIXES=feature/,minor/`). Use the repeatable CLI flags when you prefer to specify each prefix individually.
 
