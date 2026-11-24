@@ -181,14 +181,14 @@ func TestCanonicalizeOrganizationURL(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
-		input        string
-		allowedHosts []string
-		want         string
-		wantErr      bool
+		name                string
+		input               string
+		systemCollectionURI string
+		want                string
+		wantErr             bool
 	}{
 		{
-			name:  "azure devops services canonical url",
+			name:  "azure devops services canonical url outside pipelines",
 			input: "https://dev.azure.com/my-org",
 			want:  "https://dev.azure.com/my-org",
 		},
@@ -203,45 +203,68 @@ func TestCanonicalizeOrganizationURL(t *testing.T) {
 			want:  "https://dev.azure.com/my-org",
 		},
 		{
-			name:  "visualstudio.com host",
+			name:  "visualstudio.com host outside pipelines",
 			input: "https://my-org.visualstudio.com/",
 			want:  "https://my-org.visualstudio.com",
 		},
 		{
-			name:         "rejects custom host when custom allowlist is not configured",
-			input:        "https://ado.corp.example.com/tfs/DefaultCollection/",
-			allowedHosts: nil,
-			wantErr:      true,
+			name:    "rejects custom host outside pipelines",
+			input:   "https://ado.corp.example.com/tfs/DefaultCollection/",
+			wantErr: true,
 		},
 		{
-			name:         "accepts custom host when explicitly allowlisted",
-			input:        "https://ado.corp.example.com/tfs/DefaultCollection/",
-			allowedHosts: []string{"ado.corp.example.com"},
-			want:         "https://ado.corp.example.com/tfs/DefaultCollection",
+			name:                "accepts custom on-prem host when matching SYSTEM_TEAMFOUNDATIONCOLLECTIONURI",
+			input:               "https://ado.corp.example.com/tfs/DefaultCollection/",
+			systemCollectionURI: "https://ado.corp.example.com/tfs/DefaultCollection/",
+			want:                "https://ado.corp.example.com/tfs/DefaultCollection",
 		},
 		{
-			name:         "custom allowlist normalizes case and trailing dot",
-			input:        "https://ado.corp.example.com/tfs/DefaultCollection",
-			allowedHosts: []string{" ADO.CORP.EXAMPLE.COM. "},
-			want:         "https://ado.corp.example.com/tfs/DefaultCollection",
+			name:                "system collection uri normalizes case and port 443",
+			input:               "https://ado.corp.example.com/tfs/DefaultCollection",
+			systemCollectionURI: "HTTPS://ADO.CORP.EXAMPLE.COM.:443/tfs/DefaultCollection/",
+			want:                "https://ado.corp.example.com/tfs/DefaultCollection",
 		},
 		{
-			name:         "custom allowlist removes default dev.azure.com host",
-			input:        "https://dev.azure.com/my-org",
-			allowedHosts: []string{"ado.corp.example.com"},
-			wantErr:      true,
+			name:                "system collection uri on custom host removes default dev.azure.com",
+			input:               "https://dev.azure.com/my-org",
+			systemCollectionURI: "https://ado.corp.example.com/tfs/DefaultCollection/",
+			wantErr:             true,
 		},
 		{
-			name:         "custom allowlist removes default visualstudio.com host",
-			input:        "https://my-org.visualstudio.com",
-			allowedHosts: []string{"ado.corp.example.com"},
-			wantErr:      true,
+			name:                "system collection uri on custom host removes default visualstudio.com",
+			input:               "https://my-org.visualstudio.com",
+			systemCollectionURI: "https://ado.corp.example.com/tfs/DefaultCollection/",
+			wantErr:             true,
 		},
 		{
-			name:         "custom allowlist rejects unlisted custom host",
-			input:        "https://other.corp.example.com/tfs/DefaultCollection",
-			allowedHosts: []string{"ado.corp.example.com"},
-			wantErr:      true,
+			name:                "system collection uri on one visualstudio org rejects different visualstudio org",
+			input:               "https://other-org.visualstudio.com",
+			systemCollectionURI: "https://my-org.visualstudio.com/",
+			wantErr:             true,
+		},
+		{
+			name:                "system collection uri rejects mismatched custom host",
+			input:               "https://evil.example.com/tfs/DefaultCollection",
+			systemCollectionURI: "https://ado.corp.example.com/tfs/DefaultCollection/",
+			wantErr:             true,
+		},
+		{
+			name:                "rejects http system collection uri",
+			input:               "https://ado.corp.example.com/tfs/DefaultCollection",
+			systemCollectionURI: "http://ado.corp.example.com/tfs/DefaultCollection/",
+			wantErr:             true,
+		},
+		{
+			name:                "rejects non-443 port in system collection uri",
+			input:               "https://ado.corp.example.com/tfs/DefaultCollection",
+			systemCollectionURI: "https://ado.corp.example.com:8443/tfs/DefaultCollection/",
+			wantErr:             true,
+		},
+		{
+			name:                "rejects ip literal in system collection uri",
+			input:               "https://ado.corp.example.com/tfs/DefaultCollection",
+			systemCollectionURI: "https://10.0.0.5/tfs/DefaultCollection/",
+			wantErr:             true,
 		},
 		{
 			name:    "rejects bare visualstudio.com without org subdomain",
@@ -262,30 +285,6 @@ func TestCanonicalizeOrganizationURL(t *testing.T) {
 			name:    "rejects subdomain of dev.azure.com",
 			input:   "https://sub.dev.azure.com/my-org",
 			wantErr: true,
-		},
-		{
-			name:         "rejects wildcard in custom allowlist",
-			input:        "https://ado.corp.example.com/tfs/DefaultCollection",
-			allowedHosts: []string{"*.corp.example.com"},
-			wantErr:      true,
-		},
-		{
-			name:         "rejects scheme or path in custom allowlist entry",
-			input:        "https://ado.corp.example.com/tfs/DefaultCollection",
-			allowedHosts: []string{"https://ado.corp.example.com"},
-			wantErr:      true,
-		},
-		{
-			name:         "rejects port in custom allowlist entry",
-			input:        "https://ado.corp.example.com/tfs/DefaultCollection",
-			allowedHosts: []string{"ado.corp.example.com:8443"},
-			wantErr:      true,
-		},
-		{
-			name:         "rejects ip literal in custom allowlist entry",
-			input:        "https://ado.corp.example.com/tfs/DefaultCollection",
-			allowedHosts: []string{"10.0.0.5"},
-			wantErr:      true,
 		},
 		{
 			name:    "rejects empty url",
@@ -363,15 +362,15 @@ func TestCanonicalizeOrganizationURL(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := canonicalizeOrganizationURL(tc.input, tc.allowedHosts)
+			got, err := canonicalizeOrganizationURL(tc.input, tc.systemCollectionURI)
 			if tc.wantErr {
 				if err == nil {
-					t.Fatalf("expected error for %q (allowedHosts=%v), got %q", tc.input, tc.allowedHosts, got)
+					t.Fatalf("expected error for %q (systemCollectionURI=%q), got %q", tc.input, tc.systemCollectionURI, got)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("unexpected error for %q (allowedHosts=%v): %v", tc.input, tc.allowedHosts, err)
+				t.Fatalf("unexpected error for %q (systemCollectionURI=%q): %v", tc.input, tc.systemCollectionURI, err)
 			}
 			if got != tc.want {
 				t.Fatalf("got %q, want %q", got, tc.want)
@@ -399,21 +398,21 @@ func TestNewClientRejectsUntrustedHostBeforeNetworkIO(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected NewClient to reject untrusted organization host, got nil")
 	}
-	if !strings.Contains(err.Error(), "not in the trusted host allowlist") {
+	if !strings.Contains(err.Error(), "not in the trusted Microsoft Azure DevOps cloud allowlist") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	_, err = NewClient(context.Background(), Config{
-		OrganizationURL: "https://dev.azure.com/my-org",
-		AllowedHosts:    []string{"ado.corp.example.com"},
-		Project:         "proj",
-		Repository:      "repo",
-		Token:           "secret-pat-canary",
+		OrganizationURL:     "https://dev.azure.com/my-org",
+		SystemCollectionURI: "https://ado.corp.example.com/tfs/DefaultCollection/",
+		Project:             "proj",
+		Repository:          "repo",
+		Token:               "secret-pat-canary",
 	})
 	if err == nil {
-		t.Fatal("expected NewClient to reject dev.azure.com when custom AllowedHosts is set, got nil")
+		t.Fatal("expected NewClient to reject dev.azure.com when SystemCollectionURI points to on-prem host, got nil")
 	}
-	if !strings.Contains(err.Error(), "not in the trusted host allowlist") {
+	if !strings.Contains(err.Error(), "does not match Azure Pipelines collection host") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

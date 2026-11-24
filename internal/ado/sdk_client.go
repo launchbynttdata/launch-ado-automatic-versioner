@@ -17,17 +17,19 @@ import (
 
 // Config controls how the Azure DevOps client connects to the Git API.
 //
-// When AllowedHosts is empty, OrganizationURL is restricted to official
+// When SystemCollectionURI is non-empty (populated by Azure Pipelines via
+// SYSTEM_TEAMFOUNDATIONCOLLECTIONURI), OrganizationURL must match the canonical
+// HTTPS host of SystemCollectionURI, and default Microsoft cloud hosts are not
+// accepted unless they match that host. When SystemCollectionURI is empty
+// (running outside Azure Pipelines), OrganizationURL is restricted to official
 // Microsoft Azure DevOps Services cloud hosts ("dev.azure.com" and
-// "<org>.visualstudio.com"). When AllowedHosts is non-empty, the default
-// Microsoft cloud hosts are replaced and OrganizationURL must match one of the
-// configured exact hostnames.
+// "<org>.visualstudio.com").
 type Config struct {
-	OrganizationURL string
-	AllowedHosts    []string
-	Project         string
-	Repository      string
-	Token           string
+	OrganizationURL     string
+	SystemCollectionURI string
+	Project             string
+	Repository          string
+	Token               string
 }
 
 // NewClient constructs a Client backed by the official Azure DevOps Go SDK.
@@ -275,19 +277,12 @@ func (c *sdkClient) CreateAnnotatedTag(ctx context.Context, spec TagSpec) error 
 }
 
 func sanitizeConfig(cfg Config) Config {
-	allowed := make([]string, 0, len(cfg.AllowedHosts))
-	for _, host := range cfg.AllowedHosts {
-		trimmed := strings.TrimSpace(host)
-		if trimmed != "" {
-			allowed = append(allowed, trimmed)
-		}
-	}
 	return Config{
-		OrganizationURL: strings.TrimSpace(cfg.OrganizationURL),
-		AllowedHosts:    allowed,
-		Project:         strings.TrimSpace(cfg.Project),
-		Repository:      strings.TrimSpace(cfg.Repository),
-		Token:           strings.TrimSpace(cfg.Token),
+		OrganizationURL:     strings.TrimSpace(cfg.OrganizationURL),
+		SystemCollectionURI: strings.TrimSpace(cfg.SystemCollectionURI),
+		Project:             strings.TrimSpace(cfg.Project),
+		Repository:          strings.TrimSpace(cfg.Repository),
+		Token:               strings.TrimSpace(cfg.Token),
 	}
 }
 
@@ -303,57 +298,25 @@ func validateAndCanonicalizeConfig(cfg Config) (string, error) {
 		return "", errors.New("ado client: token is required")
 	}
 
-	return canonicalizeOrganizationURL(cfg.OrganizationURL, cfg.AllowedHosts)
+	return canonicalizeOrganizationURL(cfg.OrganizationURL, cfg.SystemCollectionURI)
 }
 
-func canonicalizeOrganizationURL(raw string, allowedHosts []string) (string, error) {
-	customHosts, err := normalizeAllowedHosts(allowedHosts)
+func canonicalizeOrganizationURL(raw string, systemCollectionURI string) (string, error) {
+	pipelineHost, err := parseSystemCollectionHost(systemCollectionURI)
 	if err != nil {
 		return "", err
 	}
 
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return "", errors.New("ado client: organization url is required")
-	}
-	if strings.ContainsAny(trimmed, " \t\r\n\\#") {
-		return "", errors.New("ado client: organization url is malformed or contains fragments")
-	}
-
-	parsed, err := url.Parse(trimmed)
+	parsedURL, hostname, err := parseStrictHTTPSOrgURL(raw, "organization url")
 	if err != nil {
-		return "", fmt.Errorf("ado client: invalid organization url: %w", err)
-	}
-	if !strings.EqualFold(parsed.Scheme, "https") {
-		return "", errors.New("ado client: organization url must use https")
-	}
-	if parsed.Opaque != "" {
-		return "", errors.New("ado client: organization url must not be opaque")
-	}
-	if parsed.User != nil {
-		return "", errors.New("ado client: organization url must not contain userinfo")
-	}
-	if parsed.RawQuery != "" || parsed.ForceQuery {
-		return "", errors.New("ado client: organization url must not contain query parameters")
-	}
-	if parsed.Fragment != "" {
-		return "", errors.New("ado client: organization url must not contain a fragment")
+		return "", err
 	}
 
-	hostname := normalizeHostname(parsed.Hostname())
-	if !isValidOrganizationHostname(hostname) {
-		return "", errors.New("ado client: organization url has an invalid or disallowed host")
-	}
-	if !isTrustedOrganizationHost(hostname, customHosts) {
-		return "", fmt.Errorf("ado client: organization host %q is not in the trusted host allowlist", hostname)
+	if err := verifyTrustedOrganizationHost(hostname, pipelineHost); err != nil {
+		return "", err
 	}
 
-	port := parsed.Port()
-	if port != "" && port != "443" {
-		return "", errors.New("ado client: organization url must use default https port 443")
-	}
-
-	cleanedPath, err := cleanOrganizationPath(parsed.Path)
+	cleanedPath, err := cleanOrganizationPath(parsedURL.Path)
 	if err != nil {
 		return "", err
 	}
@@ -366,41 +329,75 @@ func canonicalizeOrganizationURL(raw string, allowedHosts []string) (string, err
 	return canonical.String(), nil
 }
 
+func parseSystemCollectionHost(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+	_, hostname, err := parseStrictHTTPSOrgURL(trimmed, "system collection uri")
+	if err != nil {
+		return "", err
+	}
+	return hostname, nil
+}
+
+func parseStrictHTTPSOrgURL(raw string, label string) (*url.URL, string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, "", fmt.Errorf("ado client: %s is required", label)
+	}
+	if strings.ContainsAny(trimmed, " \t\r\n\\#") {
+		return nil, "", fmt.Errorf("ado client: %s is malformed or contains fragments", label)
+	}
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return nil, "", fmt.Errorf("ado client: invalid %s: %w", label, err)
+	}
+	if !strings.EqualFold(parsed.Scheme, "https") {
+		return nil, "", fmt.Errorf("ado client: %s must use https", label)
+	}
+	if parsed.Opaque != "" {
+		return nil, "", fmt.Errorf("ado client: %s must not be opaque", label)
+	}
+	if parsed.User != nil {
+		return nil, "", fmt.Errorf("ado client: %s must not contain userinfo", label)
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery {
+		return nil, "", fmt.Errorf("ado client: %s must not contain query parameters", label)
+	}
+	if parsed.Fragment != "" {
+		return nil, "", fmt.Errorf("ado client: %s must not contain a fragment", label)
+	}
+
+	hostname := normalizeHostname(parsed.Hostname())
+	if !isValidOrganizationHostname(hostname) {
+		return nil, "", fmt.Errorf("ado client: %s has an invalid or disallowed host", label)
+	}
+
+	port := parsed.Port()
+	if port != "" && port != "443" {
+		return nil, "", fmt.Errorf("ado client: %s must use default https port 443", label)
+	}
+
+	return parsed, hostname, nil
+}
+
 func normalizeHostname(raw string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
 }
 
-func normalizeAllowedHosts(rawHosts []string) (map[string]struct{}, error) {
-	if len(rawHosts) == 0 {
-		return nil, nil
-	}
-	normalized := make(map[string]struct{}, len(rawHosts))
-	for _, raw := range rawHosts {
-		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" {
-			continue
+func verifyTrustedOrganizationHost(hostname string, pipelineHost string) error {
+	if pipelineHost != "" {
+		if hostname != pipelineHost {
+			return fmt.Errorf("ado client: organization host %q does not match Azure Pipelines collection host %q", hostname, pipelineHost)
 		}
-		if strings.ContainsAny(trimmed, ":/\\?*@# \t\r\n") {
-			return nil, fmt.Errorf("ado client: invalid allowed organization host %q: must be an exact hostname without scheme, port, path, or wildcards", raw)
-		}
-		host := normalizeHostname(trimmed)
-		if !isValidOrganizationHostname(host) {
-			return nil, fmt.Errorf("ado client: invalid allowed organization host %q", raw)
-		}
-		normalized[host] = struct{}{}
+		return nil
 	}
-	if len(normalized) == 0 {
-		return nil, nil
+	if !isDefaultMicrosoftCloudHost(hostname) {
+		return fmt.Errorf("ado client: organization host %q is not in the trusted Microsoft Azure DevOps cloud allowlist", hostname)
 	}
-	return normalized, nil
-}
-
-func isTrustedOrganizationHost(hostname string, customHosts map[string]struct{}) bool {
-	if len(customHosts) > 0 {
-		_, ok := customHosts[hostname]
-		return ok
-	}
-	return isDefaultMicrosoftCloudHost(hostname)
+	return nil
 }
 
 func isDefaultMicrosoftCloudHost(hostname string) bool {
