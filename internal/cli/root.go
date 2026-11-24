@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -27,15 +28,16 @@ import (
 )
 
 const (
-	envOrgURL     = "AAV_ORG_URL"
-	envProject    = "AAV_PROJECT"
-	envRepo       = "AAV_REPO"
-	envToken      = "AAV_TOKEN"
-	envLogLevel   = "AAV_LOG_LEVEL"
-	envLabelPref  = "AAV_LABEL_PREFIX"
-	envLabelMajor = "AAV_LABEL_MAJOR"
-	envLabelMinor = "AAV_LABEL_MINOR"
-	envLabelPatch = "AAV_LABEL_PATCH"
+	envOrgURL              = "AAV_ORG_URL"
+	envSystemCollectionURI = "SYSTEM_TEAMFOUNDATIONCOLLECTIONURI"
+	envProject             = "AAV_PROJECT"
+	envRepo                = "AAV_REPO"
+	envToken               = "AAV_TOKEN"
+	envLogLevel            = "AAV_LOG_LEVEL"
+	envLabelPref           = "AAV_LABEL_PREFIX"
+	envLabelMajor          = "AAV_LABEL_MAJOR"
+	envLabelMinor          = "AAV_LABEL_MINOR"
+	envLabelPatch          = "AAV_LABEL_PATCH"
 
 	envBranchMajor = "AAV_BRANCH_MAJOR_PREFIXES"
 	envBranchMinor = "AAV_BRANCH_MINOR_PREFIXES"
@@ -591,10 +593,11 @@ func buildRuntime(ctx context.Context, stdin io.Reader, flags *rootFlagSet) (run
 	})
 
 	client, err := ado.NewClient(ctx, ado.Config{
-		OrganizationURL: orgURL,
-		Project:         project,
-		Repository:      repo,
-		Token:           token,
+		OrganizationURL:     orgURL,
+		SystemCollectionURI: os.Getenv(envSystemCollectionURI),
+		Project:             project,
+		Repository:          repo,
+		Token:               token,
 	})
 	if err != nil {
 		return runtimeConfig{}, nil, err

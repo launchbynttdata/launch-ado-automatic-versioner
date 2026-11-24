@@ -160,7 +160,7 @@ stages:
 
 | Purpose | Environment Variable | Flag | Default | Notes |
 | --- | --- | --- | --- | --- |
-| Org URL | `AAV_ORG_URL` | `--org-url` | _required_ | `https://dev.azure.com/{org}` |
+| Org URL | `AAV_ORG_URL` | `--org-url` | _required_ | Absolute `https://` URL on default port 443 with no userinfo, query, or fragment; must match `SYSTEM_TEAMFOUNDATIONCOLLECTIONURI` when running in Azure Pipelines, or `dev.azure.com` / `<org>.visualstudio.com` outside Pipelines |
 | Project | `AAV_PROJECT` | `--project` | _required_ | ADO project name |
 | Repository | `AAV_REPO` | `--repo` | _required_ | Git repo name |
 | Token | `AAV_TOKEN` | `--token-stdin` | _required_ | PAT or `System.AccessToken` (via env or stdin; never pass secrets in CLI args) |
@@ -190,6 +190,10 @@ stages:
 > **Precedence**: environment variables always win over explicit flags; conflicts are logged in both terse and verbose modes.
 
 > **Breaking change (`--token` removed)**: The `--token <value>` CLI flag was removed so secrets are not exposed in process arguments. Supply the Azure DevOps token through the `AAV_TOKEN` environment variable (recommended in CI) or via standard input using `--token-stdin` (for example, `printf '%s' "$TOKEN" | aav pr-label --token-stdin ...`).
+
+> **Trusted organization hosts & known limitation**: `aav` does not expose a CLI flag or `AAV_*` environment variable to expand trusted hosts. When `SYSTEM_TEAMFOUNDATIONCOLLECTIONURI` is present (automatically set by Azure Pipelines on both Azure DevOps Services and Azure DevOps Server), `AAV_ORG_URL` / `--org-url` must target the same Azure DevOps Services organization (`https://dev.azure.com/<org>` and `https://<org>.visualstudio.com` are treated as equivalent for the same `<org>`) or the exact same custom HTTPS hostname as `SYSTEM_TEAMFOUNDATIONCOLLECTIONURI`, replacing the default Microsoft cloud allowlist. When `SYSTEM_TEAMFOUNDATIONCOLLECTIONURI` is unset, `aav` falls back to allowing official Microsoft Azure DevOps Services cloud endpoints (`dev.azure.com/<org>` and `<org>.visualstudio.com`).
+>
+> **Known limitation**: Checking `SYSTEM_TEAMFOUNDATIONCOLLECTIONURI` is a defense-in-depth guardrail against callers who can only influence `AAV_ORG_URL` or `--org-url` (for example, pipeline parameters or variables passed into a protected template), **not** against an actor who controls the process environment or shell step. Anyone able to modify the process environment can unset `SYSTEM_TEAMFOUNDATIONCOLLECTIONURI` (re-enabling any tenant on `dev.azure.com` / `<org>.visualstudio.com`, including an attacker-owned Azure DevOps organization) or set `SYSTEM_TEAMFOUNDATIONCOLLECTIONURI` to match an arbitrary HTTPS host. Always protect pipeline YAML via `extends` templates / branch policies and keep `AAV_ORG_URL` pinned in protected pipeline configuration when a token is present.
 
 > **Branch prefix env format**: When using the environment variables above, provide comma-separated prefixes with no quotes (e.g. `AAV_BRANCH_MINOR_PREFIXES=feature/,minor/`). Use the repeatable CLI flags when you prefer to specify each prefix individually.
 

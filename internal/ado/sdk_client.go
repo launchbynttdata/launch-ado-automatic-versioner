@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -13,11 +16,27 @@ import (
 )
 
 // Config controls how the Azure DevOps client connects to the Git API.
+//
+// When SystemCollectionURI is non-empty (populated by Azure Pipelines via
+// SYSTEM_TEAMFOUNDATIONCOLLECTIONURI), OrganizationURL must target the same
+// Azure DevOps Services organization (treating "https://dev.azure.com/<org>"
+// and "https://<org>.visualstudio.com" as equivalent) or the exact same custom
+// HTTPS host as SystemCollectionURI, and default Microsoft cloud hosts are not
+// accepted unless they match that organization. When SystemCollectionURI is
+// empty, OrganizationURL falls back to official Microsoft Azure DevOps Services
+// cloud hosts ("dev.azure.com/<org>" and "<org>.visualstudio.com").
+//
+// Known limitation: SYSTEM_TEAMFOUNDATIONCOLLECTIONURI is an unauthenticated
+// process environment variable. An actor who can modify the child process
+// environment (unset it to fall back to multi-tenant Microsoft cloud hosts, or
+// set it to an attacker-controlled HTTPS host) can bypass this check; it only
+// defends against callers limited to AAV_ORG_URL / --org-url.
 type Config struct {
-	OrganizationURL string
-	Project         string
-	Repository      string
-	Token           string
+	OrganizationURL     string
+	SystemCollectionURI string
+	Project             string
+	Repository          string
+	Token               string
 }
 
 // NewClient constructs a Client backed by the official Azure DevOps Go SDK.
@@ -27,11 +46,12 @@ func NewClient(ctx context.Context, cfg Config) (Client, error) {
 	}
 
 	trimmed := sanitizeConfig(cfg)
-	if err := validateConfig(trimmed); err != nil {
+	canonicalOrgURL, err := validateAndCanonicalizeConfig(trimmed)
+	if err != nil {
 		return nil, err
 	}
 
-	connection := azuredevops.NewPatConnection(trimmed.OrganizationURL, trimmed.Token)
+	connection := azuredevops.NewPatConnection(canonicalOrgURL, trimmed.Token)
 	gitClient, err := git.NewClient(ctx, connection)
 	if err != nil {
 		return nil, fmt.Errorf("creating git client: %w", err)
@@ -265,26 +285,223 @@ func (c *sdkClient) CreateAnnotatedTag(ctx context.Context, spec TagSpec) error 
 
 func sanitizeConfig(cfg Config) Config {
 	return Config{
-		OrganizationURL: strings.TrimSpace(cfg.OrganizationURL),
-		Project:         strings.TrimSpace(cfg.Project),
-		Repository:      strings.TrimSpace(cfg.Repository),
-		Token:           strings.TrimSpace(cfg.Token),
+		OrganizationURL:     strings.TrimSpace(cfg.OrganizationURL),
+		SystemCollectionURI: strings.TrimSpace(cfg.SystemCollectionURI),
+		Project:             strings.TrimSpace(cfg.Project),
+		Repository:          strings.TrimSpace(cfg.Repository),
+		Token:               strings.TrimSpace(cfg.Token),
 	}
 }
 
-func validateConfig(cfg Config) error {
+func validateAndCanonicalizeConfig(cfg Config) (string, error) {
 	switch {
 	case cfg.OrganizationURL == "":
-		return errors.New("ado client: organization url is required")
+		return "", errors.New("ado client: organization url is required")
 	case cfg.Project == "":
-		return errors.New("ado client: project is required")
+		return "", errors.New("ado client: project is required")
 	case cfg.Repository == "":
-		return errors.New("ado client: repository is required")
+		return "", errors.New("ado client: repository is required")
 	case cfg.Token == "":
-		return errors.New("ado client: token is required")
-	default:
+		return "", errors.New("ado client: token is required")
+	}
+
+	return canonicalizeOrganizationURL(cfg.OrganizationURL, cfg.SystemCollectionURI)
+}
+
+type parsedOrgEndpoint struct {
+	hostname    string
+	cleanedPath string
+	cloudOrg    string
+	isCloud     bool
+}
+
+func canonicalizeOrganizationURL(raw string, systemCollectionURI string) (string, error) {
+	var pipelineEndpoint *parsedOrgEndpoint
+	if strings.TrimSpace(systemCollectionURI) != "" {
+		ep, err := parseOrgEndpoint(systemCollectionURI, "system collection uri")
+		if err != nil {
+			return "", err
+		}
+		pipelineEndpoint = &ep
+	}
+
+	orgEndpoint, err := parseOrgEndpoint(raw, "organization url")
+	if err != nil {
+		return "", err
+	}
+
+	if err := verifyTrustedOrganizationEndpoint(orgEndpoint, pipelineEndpoint); err != nil {
+		return "", err
+	}
+
+	canonical := url.URL{
+		Scheme: "https",
+		Host:   orgEndpoint.hostname,
+		Path:   orgEndpoint.cleanedPath,
+	}
+	return canonical.String(), nil
+}
+
+func parseOrgEndpoint(raw string, label string) (parsedOrgEndpoint, error) {
+	parsedURL, hostname, err := parseStrictHTTPSOrgURL(raw, label)
+	if err != nil {
+		return parsedOrgEndpoint{}, err
+	}
+	cleanedPath, err := cleanOrganizationPath(parsedURL.Path, label)
+	if err != nil {
+		return parsedOrgEndpoint{}, err
+	}
+	cloudOrg, isCloud, err := extractMicrosoftCloudOrg(hostname, cleanedPath, label)
+	if err != nil {
+		return parsedOrgEndpoint{}, err
+	}
+	return parsedOrgEndpoint{
+		hostname:    hostname,
+		cleanedPath: cleanedPath,
+		cloudOrg:    cloudOrg,
+		isCloud:     isCloud,
+	}, nil
+}
+
+func extractMicrosoftCloudOrg(hostname string, cleanedPath string, label string) (string, bool, error) {
+	if hostname == "dev.azure.com" {
+		trimmed := strings.TrimPrefix(cleanedPath, "/")
+		if trimmed == "" {
+			return "", true, fmt.Errorf("ado client: %s on dev.azure.com must include an organization path segment", label)
+		}
+		firstSeg, _, _ := strings.Cut(trimmed, "/")
+		return strings.ToLower(firstSeg), true, nil
+	}
+	if strings.HasSuffix(hostname, ".visualstudio.com") {
+		orgLabel := strings.TrimSuffix(hostname, ".visualstudio.com")
+		if orgLabel != "" && !strings.Contains(orgLabel, ".") {
+			return strings.ToLower(orgLabel), true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func parseStrictHTTPSOrgURL(raw string, label string) (*url.URL, string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, "", fmt.Errorf("ado client: %s is required", label)
+	}
+	if strings.ContainsAny(trimmed, " \t\r\n\\#") {
+		return nil, "", fmt.Errorf("ado client: %s is malformed or contains fragments", label)
+	}
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return nil, "", fmt.Errorf("ado client: invalid %s: %w", label, err)
+	}
+	if !strings.EqualFold(parsed.Scheme, "https") {
+		return nil, "", fmt.Errorf("ado client: %s must use https", label)
+	}
+	if parsed.Opaque != "" {
+		return nil, "", fmt.Errorf("ado client: %s must not be opaque", label)
+	}
+	if parsed.User != nil {
+		return nil, "", fmt.Errorf("ado client: %s must not contain userinfo", label)
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery {
+		return nil, "", fmt.Errorf("ado client: %s must not contain query parameters", label)
+	}
+	if parsed.Fragment != "" {
+		return nil, "", fmt.Errorf("ado client: %s must not contain a fragment", label)
+	}
+
+	hostname := normalizeHostname(parsed.Hostname())
+	if !isValidOrganizationHostname(hostname) {
+		return nil, "", fmt.Errorf("ado client: %s has an invalid or disallowed host", label)
+	}
+
+	port := parsed.Port()
+	if port != "" && port != "443" {
+		return nil, "", fmt.Errorf("ado client: %s must use default https port 443", label)
+	}
+
+	return parsed, hostname, nil
+}
+
+func normalizeHostname(raw string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
+}
+
+func verifyTrustedOrganizationEndpoint(org parsedOrgEndpoint, pipeline *parsedOrgEndpoint) error {
+	if pipeline != nil {
+		if org.isCloud && pipeline.isCloud {
+			if org.cloudOrg != pipeline.cloudOrg {
+				return fmt.Errorf("ado client: organization %q does not match Azure Pipelines organization %q", org.cloudOrg, pipeline.cloudOrg)
+			}
+			return nil
+		}
+		if org.isCloud != pipeline.isCloud || org.hostname != pipeline.hostname {
+			return fmt.Errorf("ado client: organization host %q does not match Azure Pipelines collection host %q", org.hostname, pipeline.hostname)
+		}
 		return nil
 	}
+	if !org.isCloud {
+		return fmt.Errorf("ado client: organization host %q is not in the trusted Microsoft Azure DevOps cloud allowlist", org.hostname)
+	}
+	return nil
+}
+
+func isValidOrganizationHostname(hostname string) bool {
+	if hostname == "" || hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") {
+		return false
+	}
+	if net.ParseIP(hostname) != nil {
+		return false
+	}
+	if !strings.Contains(hostname, ".") {
+		return false
+	}
+	labels := strings.Split(hostname, ".")
+	allDigitsLast := true
+	lastLabel := labels[len(labels)-1]
+	for i := 0; i < len(lastLabel); i++ {
+		if lastLabel[i] < '0' || lastLabel[i] > '9' {
+			allDigitsLast = false
+			break
+		}
+	}
+	if allDigitsLast {
+		return false
+	}
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 {
+			return false
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			ch := label[i]
+			isLowerAlpha := ch >= 'a' && ch <= 'z'
+			isDigit := ch >= '0' && ch <= '9'
+			if !isLowerAlpha && !isDigit && ch != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func cleanOrganizationPath(rawPath string, label string) (string, error) {
+	trimmed := strings.TrimSpace(rawPath)
+	if trimmed == "" || trimmed == "/" {
+		return "", nil
+	}
+	for _, seg := range strings.Split(trimmed, "/") {
+		if seg == "." || seg == ".." {
+			return "", fmt.Errorf("ado client: %s path must not contain relative segments", label)
+		}
+	}
+	cleaned := path.Clean("/" + strings.TrimPrefix(trimmed, "/"))
+	if cleaned == "/" {
+		return "", nil
+	}
+	return strings.TrimRight(cleaned, "/"), nil
 }
 
 func convertGitRefs(values []git.GitRef) []Ref {
